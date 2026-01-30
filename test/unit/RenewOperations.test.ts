@@ -1,297 +1,280 @@
 import { expect } from "chai";
-import { ethers } from "hardhat";
-import { loadFixture, time } from "@nomicfoundation/hardhat-network-helpers";
-import { SavingBank, MockUSDC, DepositCertificate, Vault } from "../../typechain-types";
-import { HardhatEthersSigner } from "@nomicfoundation/hardhat-ethers/signers";
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
+import { deployWithPlanFixture } from "../helpers/fixtures";
+import { advanceDays, advanceToTimestamp } from "../helpers/time";
+import { ONE_USDC, BASIS_POINTS, DAYS_PER_YEAR, PREMIUM_PLAN } from "../helpers/constants";
 
-describe("RenewOperations", function () {
-  let savingBank: SavingBank;
-  let mockUSDC: MockUSDC;
-  let depositCertificate: DepositCertificate;
-  let vault: Vault;
-  let owner: HardhatEthersSigner;
-  let user1: HardhatEthersSigner;
-  let user2: HardhatEthersSigner;
-
-  async function deployRenewFixture() {
-    const [owner, user1, user2] = await ethers.getSigners();
-
-    // Deploy MockUSDC
-    const MockUSDC = await ethers.getContractFactory("MockUSDC");
-    const mockUSDC = await MockUSDC.deploy();
-
-    // Deploy DepositCertificate
-    const DepositCertificate = await ethers.getContractFactory("DepositCertificate");
-    const depositCertificate = await DepositCertificate.deploy(
-      "SavingBank Deposit Certificate",
-      "SBDC"
-    );
-
-    // Deploy Vault
-    const Vault = await ethers.getContractFactory("Vault");
-    const vault = await Vault.deploy(mockUSDC.target);
-
-    // Deploy SavingBank
-    const SavingBank = await ethers.getContractFactory("SavingBank");
-    const savingBank = await SavingBank.deploy(
-      mockUSDC.target,
-      depositCertificate.target,
-      vault.target
-    );
-
-    // Setup roles and permissions
-    await vault.grantRole(await vault.LIQUIDITY_MANAGER_ROLE(), savingBank.target);
-    await vault.grantRole(await vault.WITHDRAW_ROLE(), savingBank.target);
-    await depositCertificate.grantRole(await depositCertificate.MINTER_ROLE(), savingBank.target);
-
-    // Create a basic saving plan
-    await savingBank.createSavingPlan({
-      name: "Basic Plan",
-      minDepositAmount: 100_000000n, // 100 USDC
-      maxDepositAmount: 0, // No max
-      minTermInDays: 30,
-      maxTermInDays: 365,
-      annualInterestRateInBasisPoints: 800, // 8%
-      penaltyRateInBasisPoints: 100 // 1%
-    });
-
-    // Mint tokens for users
-    await mockUSDC.mint(user1.address, 50000_000000n); // 50,000 USDC
-    await mockUSDC.mint(user2.address, 50000_000000n);
-
-    // Add liquidity to vault
-    await mockUSDC.mint(vault.target, 100000_000000n); // 100,000 USDC
-
-    return { savingBank, mockUSDC, depositCertificate, vault, owner, user1, user2 };
+describe("Renew Operations", function () {
+  /**
+   * Helper: Create a deposit and return depositId
+   */
+  async function createTestDeposit(
+    savingBank: any,
+    usdc: any,
+    user: any,
+    amount: bigint,
+    termDays: number
+  ): Promise<bigint> {
+    await usdc.connect(user).approve(savingBank.target, amount);
+    const tx = await savingBank.connect(user).createDeposit(1, amount, termDays);
+    const receipt = await tx.wait();
+    const event = receipt.logs.find((log: any) => log.fragment?.name === "DepositCreated");
+    return event.args[0];
   }
 
-  beforeEach(async function () {
-    const fixture = await loadFixture(deployRenewFixture);
-    savingBank = fixture.savingBank;
-    mockUSDC = fixture.mockUSDC;
-    depositCertificate = fixture.depositCertificate;
-    vault = fixture.vault;
-    owner = fixture.owner;
-    user1 = fixture.user1;
-    user2 = fixture.user2;
-  });
+  describe("renew - Success", function () {
+    it("should renew deposit after maturity with compound interest", async function () {
+      const { savingBank, usdc, user1 } = await loadFixture(deployWithPlanFixture);
 
-  describe("Automatic Renewal at Maturity", function () {
-    it("should renew deposit automatically with same terms", async function () {
-      const depositAmount = 10000_000000n;
+      const amount = 10_000n * ONE_USDC;
       const termDays = 90;
+      const depositId = await createTestDeposit(savingBank, usdc, user1, amount, termDays);
 
-      // Create initial deposit
-      await mockUSDC.connect(user1).approve(savingBank.target, depositAmount);
-      const tx = await savingBank.connect(user1).createDeposit(1, depositAmount, termDays);
-      const receipt = await tx.wait();
-      
-      const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-      const depositId = event.args[0];
+      // Calculate expected interest
+      const plan = await savingBank.getPlan(1);
+      const expectedInterest = (amount * plan.interestRateBps * BigInt(termDays)) / (BASIS_POINTS * DAYS_PER_YEAR);
+      const newAmount = amount + expectedInterest;
 
-      const initialDeposit = await savingBank.getDeposit(depositId);
-      
-      // Fast forward to maturity
-      await time.increaseTo(initialDeposit.maturityDate);
-      
-      // For now, test that renewal status exists
-      // Note: Actual renewal logic would need to be implemented in contract
-      expect(initialDeposit.status).to.equal(0n); // Active
-      
-      // This test validates that the renewal infrastructure is ready
-      // Once contract renewal logic is implemented, this should test:
-      // 1. Automatic renewal at maturity
-      // 2. Compounding of interest
-      // 3. Status change to Renewed
+      // Advance to maturity
+      const deposit = await savingBank.getDeposit(depositId);
+      await advanceToTimestamp(deposit.maturityTime);
+
+      // Renew
+      const newTermDays = 60;
+      await expect(savingBank.connect(user1).renew(depositId, 1, newTermDays))
+        .to.emit(savingBank, "Renewed")
+        .withArgs(depositId, 2n, newAmount);
+
+      // Check new deposit
+      const newDeposit = await savingBank.getDeposit(2);
+      expect(newDeposit.amount).to.equal(newAmount);
+      expect(newDeposit.termDays).to.equal(newTermDays);
+      expect(newDeposit.isClosed).to.be.false;
+
+      // Old deposit should be closed
+      const oldDeposit = await savingBank.getDeposit(depositId);
+      expect(oldDeposit.isClosed).to.be.true;
     });
 
-    it("should handle manual renewal before maturity", async function () {
-      const depositAmount = 5000_000000n;
-      const termDays = 60;
+    it("should burn old NFT and mint new NFT", async function () {
+      const { savingBank, usdc, certificate, user1 } = await loadFixture(deployWithPlanFixture);
 
-      // Create deposit
-      await mockUSDC.connect(user1).approve(savingBank.target, depositAmount);
-      const tx = await savingBank.connect(user1).createDeposit(1, depositAmount, termDays);
+      const depositId = await createTestDeposit(savingBank, usdc, user1, 1000n * ONE_USDC, 30);
+
+      await advanceDays(31);
+
+      // Renew
+      await savingBank.connect(user1).renew(depositId, 1, 60);
+
+      // Old NFT burned
+      await expect(certificate.ownerOf(depositId)).to.be.revertedWithCustomError(certificate, "ERC721NonexistentToken");
+
+      // New NFT minted
+      expect(await certificate.ownerOf(2)).to.equal(user1.address);
+    });
+
+    it("should emit both Renewed and DepositCreated events", async function () {
+      const { savingBank, usdc, user1 } = await loadFixture(deployWithPlanFixture);
+
+      const depositId = await createTestDeposit(savingBank, usdc, user1, 1000n * ONE_USDC, 30);
+      await advanceDays(31);
+
+      const tx = await savingBank.connect(user1).renew(depositId, 1, 60);
       const receipt = await tx.wait();
-      
-      const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-      const depositId = event.args[0];
 
-      // Fast forward to 30 days (halfway)
-      const deposit = await savingBank.getDeposit(depositId);
-      await time.increaseTo(Number(deposit.depositDate) + 30 * 24 * 60 * 60);
-      
-      // Test that deposit is still active and ready for future renewal functionality
-      const currentDeposit = await savingBank.getDeposit(depositId);
-      expect(currentDeposit.status).to.equal(0n); // Active
-      expect(currentDeposit.id).to.equal(depositId);
+      const renewedEvent = receipt.logs.find((log: any) => log.fragment?.name === "Renewed");
+      const depositCreatedEvent = receipt.logs.find((log: any) => log.fragment?.name === "DepositCreated");
+
+      expect(renewedEvent).to.not.be.undefined;
+      expect(depositCreatedEvent).to.not.be.undefined;
     });
   });
 
-  describe("Renewal with Different Terms", function () {
-    it("should allow renewal with extended term", async function () {
-      const depositAmount = 8000_000000n;
-      const initialTerm = 30;
+  describe("renew - To different plan", function () {
+    it("should renew to different plan", async function () {
+      const { savingBank, usdc, admin, user1 } = await loadFixture(deployWithPlanFixture);
 
-      // Create initial deposit
-      await mockUSDC.connect(user1).approve(savingBank.target, depositAmount);
-      const tx = await savingBank.connect(user1).createDeposit(1, depositAmount, initialTerm);
-      const receipt = await tx.wait();
-      
-      const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-      const depositId = event.args[0];
+      // Create premium plan
+      await savingBank.createPlan(PREMIUM_PLAN);
 
-      const deposit = await savingBank.getDeposit(depositId);
-      expect(Number(deposit.termInDays)).to.equal(initialTerm);
-      
-      // Test infrastructure is ready for extended term renewals
-      // Future implementation should allow:
-      // 1. Renewal with longer terms (e.g., 30 → 90 days)
-      // 2. Recalculation of interest based on new term
-      // 3. Updated maturity date
+      // Add more liquidity for premium plan interest
+      await usdc.connect(admin).approve(savingBank.target, 500_000n * ONE_USDC);
+      await savingBank.depositToVault(500_000n * ONE_USDC);
+
+      // Create deposit in plan 1
+      const depositId = await createTestDeposit(savingBank, usdc, user1, 5000n * ONE_USDC, 30);
+
+      await advanceDays(31);
+
+      // Renew to plan 2 (premium)
+      await savingBank.connect(user1).renew(depositId, 2, 90);
+
+      const newDeposit = await savingBank.getDeposit(2);
+      expect(newDeposit.planId).to.equal(2n);
     });
 
-    it("should allow renewal with different saving plan", async function () {
-      // Create second saving plan with higher interest rate
-      await savingBank.createSavingPlan({
-        name: "Premium Plan",
-        minDepositAmount: 1000_000000n, // 1,000 USDC  
-        maxDepositAmount: 0,
-        minTermInDays: 90,
-        maxTermInDays: 730,
-        annualInterestRateInBasisPoints: 1200, // 12%
-        penaltyRateInBasisPoints: 150 // 1.5%
+    it("should validate new amount against new plan limits", async function () {
+      const { savingBank, usdc, user1 } = await loadFixture(deployWithPlanFixture);
+
+      // Create plan with high minAmount
+      await savingBank.createPlan({
+        ...PREMIUM_PLAN,
+        minAmount: 50_000n * ONE_USDC, // Very high minimum
       });
 
-      const depositAmount = 15000_000000n;
-      
-      // Create deposit with basic plan
-      await mockUSDC.connect(user1).approve(savingBank.target, depositAmount);
-      const tx = await savingBank.connect(user1).createDeposit(1, depositAmount, 90);
-      const receipt = await tx.wait();
-      
-      const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-      const depositId = event.args[0];
+      // Create small deposit
+      const depositId = await createTestDeposit(savingBank, usdc, user1, 1000n * ONE_USDC, 30);
 
-      const deposit = await savingBank.getDeposit(depositId);
-      expect(deposit.savingPlanId).to.equal(1n);
-      
-      // Test that both plans are available for renewal scenarios
-      const plan1 = await savingBank.getSavingPlan(1);
-      const plan2 = await savingBank.getSavingPlan(2);
-      
-      expect(plan1.annualInterestRateInBasisPoints).to.equal(800n);
-      expect(plan2.annualInterestRateInBasisPoints).to.equal(1200n);
-      
-      // Infrastructure ready for plan switching on renewal
-    });
-  });
+      await advanceDays(31);
 
-  describe("Compounding Interest on Renewal", function () {
-    it("should compound interest when renewing deposit", async function () {
-      const depositAmount = 12000_000000n;
-      const termDays = 90;
-
-      // Create deposit
-      await mockUSDC.connect(user1).approve(savingBank.target, depositAmount);
-      const tx = await savingBank.connect(user1).createDeposit(1, depositAmount, termDays);
-      const receipt = await tx.wait();
-      
-      const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-      const depositId = event.args[0];
-
-      const deposit = await savingBank.getDeposit(depositId);
-      const originalExpectedInterest = deposit.expectedInterest;
-      
-      expect(Number(originalExpectedInterest)).to.be.gt(0);
-      
-      // Test shows interest calculation works for compounding scenarios
-      // Future renewal implementation should:
-      // 1. Add earned interest to principal 
-      // 2. Recalculate interest on new (larger) principal
-      // 3. Update deposit amount and expected interest accordingly
-    });
-
-    it("should track renewal history and iterations", async function () {
-      const depositAmount = 6000_000000n;
-      
-      // Create deposit
-      await mockUSDC.connect(user1).approve(savingBank.target, depositAmount);
-      const tx = await savingBank.connect(user1).createDeposit(1, depositAmount, 60);
-      const receipt = await tx.wait();
-      
-      const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-      const depositId = event.args[0];
-
-      const deposit = await savingBank.getDeposit(depositId);
-      
-      // Test that we can track deposits that could be renewed multiple times
-      expect(deposit.status).to.equal(0n); // Active
-      expect(deposit.id).to.equal(depositId);
-      
-      // Future enhancement: Add renewal counter/history to deposit struct
-      // to track how many times a deposit has been renewed
-    });
-  });
-
-  describe("Renewal Security and Validation", function () {
-    it("should only allow deposit owner to initiate renewal", async function () {
-      const depositAmount = 4000_000000n;
-      
-      // User1 creates deposit
-      await mockUSDC.connect(user1).approve(savingBank.target, depositAmount);
-      const tx = await savingBank.connect(user1).createDeposit(1, depositAmount, 45);
-      const receipt = await tx.wait();
-      
-      const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-      const depositId = event.args[0];
-
-      // Verify deposit ownership
-      const deposit = await savingBank.getDeposit(depositId);
-      expect(deposit.user).to.equal(user1.address);
-      
-      // Test infrastructure ready for ownership validation in renewal
-      // Future renewal function should check:
-      // require(deposit.user == msg.sender, "UnauthorizedRenewal");
-    });
-
-    it("should validate new terms meet plan requirements", async function () {
-      const depositAmount = 7000_000000n;
-      
-      await mockUSDC.connect(user1).approve(savingBank.target, depositAmount);
-      const tx = await savingBank.connect(user1).createDeposit(1, depositAmount, 120);
-      const receipt = await tx.wait();
-      
-      const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-      const depositId = event.args[0];
-
-      // Verify plan constraints are accessible for validation
-      const savingPlan = await savingBank.getSavingPlan(1);
-      expect(Number(savingPlan.minTermInDays)).to.equal(30);
-      expect(Number(savingPlan.maxTermInDays)).to.equal(365);
-      expect(savingPlan.minDepositAmount).to.equal(100_000000n);
-      
-      // Infrastructure ready for renewal term validation
-      // Future renewal should validate: new term within plan bounds
-    });
-
-    it("should handle renewal events and notifications", async function () {
-      const depositAmount = 9000_000000n;
-      
-      await mockUSDC.connect(user1).approve(savingBank.target, depositAmount);
-      const tx = await savingBank.connect(user1).createDeposit(1, depositAmount, 180);
-      const receipt = await tx.wait();
-      
-      // Test that we can emit and track events properly
-      const events = receipt.logs.filter((log: any) => 
-        log.fragment && log.fragment.name === 'DepositCreated'
+      // Renew to plan with high minimum should fail
+      await expect(savingBank.connect(user1).renew(depositId, 2, 90)).to.be.revertedWithCustomError(
+        savingBank,
+        "InvalidAmount"
       );
-      expect(events.length).to.equal(1);
-      
-      // Infrastructure ready for renewal events:
-      // - DepositRenewed(depositId, newTermDays, newExpectedInterest)
-      // - AutoRenewalEnabled/Disabled events
-      expect(events[0].args[1]).to.equal(user1.address); // depositor
+    });
+
+    it("should validate new term against new plan limits", async function () {
+      const { savingBank, usdc, user1 } = await loadFixture(deployWithPlanFixture);
+
+      // Create plan with longer min term
+      await savingBank.createPlan({
+        ...PREMIUM_PLAN,
+        minTermDays: 180,
+      });
+
+      const depositId = await createTestDeposit(savingBank, usdc, user1, 5000n * ONE_USDC, 30);
+
+      await advanceDays(31);
+
+      // Renew with term shorter than new plan's minimum
+      await expect(savingBank.connect(user1).renew(depositId, 2, 60)).to.be.revertedWithCustomError(
+        savingBank,
+        "InvalidTerm"
+      );
+    });
+  });
+
+  describe("renew - Validation", function () {
+    it("should reject when deposit not found", async function () {
+      const { savingBank, user1 } = await loadFixture(deployWithPlanFixture);
+
+      await expect(savingBank.connect(user1).renew(99, 1, 60)).to.be.revertedWithCustomError(
+        savingBank,
+        "DepositNotFound"
+      );
+    });
+
+    it("should reject when deposit already closed", async function () {
+      const { savingBank, usdc, user1 } = await loadFixture(deployWithPlanFixture);
+
+      const depositId = await createTestDeposit(savingBank, usdc, user1, 1000n * ONE_USDC, 30);
+
+      await advanceDays(31);
+      await savingBank.connect(user1).withdraw(depositId);
+
+      // Try to renew closed deposit
+      await expect(savingBank.connect(user1).renew(depositId, 1, 60)).to.be.revertedWithCustomError(
+        savingBank,
+        "DepositClosed"
+      );
+    });
+
+    it("should reject when not matured yet", async function () {
+      const { savingBank, usdc, user1 } = await loadFixture(deployWithPlanFixture);
+
+      const depositId = await createTestDeposit(savingBank, usdc, user1, 1000n * ONE_USDC, 90);
+
+      // Only advance 30 days (not matured)
+      await advanceDays(30);
+
+      await expect(savingBank.connect(user1).renew(depositId, 1, 60)).to.be.revertedWithCustomError(
+        savingBank,
+        "DepositNotMature"
+      );
+    });
+
+    it("should reject when not NFT owner", async function () {
+      const { savingBank, usdc, user1, user2 } = await loadFixture(deployWithPlanFixture);
+
+      const depositId = await createTestDeposit(savingBank, usdc, user1, 1000n * ONE_USDC, 30);
+
+      await advanceDays(31);
+
+      // user2 tries to renew user1's deposit
+      await expect(savingBank.connect(user2).renew(depositId, 1, 60)).to.be.revertedWithCustomError(
+        savingBank,
+        "NotOwner"
+      );
+    });
+
+    it("should reject when new plan not found", async function () {
+      const { savingBank, usdc, user1 } = await loadFixture(deployWithPlanFixture);
+
+      const depositId = await createTestDeposit(savingBank, usdc, user1, 1000n * ONE_USDC, 30);
+
+      await advanceDays(31);
+
+      await expect(savingBank.connect(user1).renew(depositId, 99, 60)).to.be.revertedWithCustomError(
+        savingBank,
+        "PlanNotFound"
+      );
+    });
+
+    it("should reject when new plan inactive", async function () {
+      const { savingBank, usdc, user1 } = await loadFixture(deployWithPlanFixture);
+
+      // Create and deactivate plan 2
+      await savingBank.createPlan(PREMIUM_PLAN);
+      await savingBank.setPlanActive(2, false);
+
+      const depositId = await createTestDeposit(savingBank, usdc, user1, 5000n * ONE_USDC, 30);
+
+      await advanceDays(31);
+
+      await expect(savingBank.connect(user1).renew(depositId, 2, 90)).to.be.revertedWithCustomError(
+        savingBank,
+        "PlanNotActive"
+      );
+    });
+
+    it("should reject when paused", async function () {
+      const { savingBank, usdc, user1 } = await loadFixture(deployWithPlanFixture);
+
+      const depositId = await createTestDeposit(savingBank, usdc, user1, 1000n * ONE_USDC, 30);
+
+      await advanceDays(31);
+      await savingBank.pause();
+
+      await expect(savingBank.connect(user1).renew(depositId, 1, 60)).to.be.revertedWithCustomError(
+        savingBank,
+        "EnforcedPause"
+      );
+    });
+  });
+
+  describe("NFT Transfer then renew", function () {
+    it("should allow new owner to renew after NFT transfer", async function () {
+      const { savingBank, usdc, certificate, user1, user2 } = await loadFixture(deployWithPlanFixture);
+
+      const depositId = await createTestDeposit(savingBank, usdc, user1, 1000n * ONE_USDC, 30);
+
+      // Transfer NFT
+      await certificate.connect(user1).transferFrom(user1.address, user2.address, depositId);
+
+      await advanceDays(31);
+
+      // user1 cannot renew
+      await expect(savingBank.connect(user1).renew(depositId, 1, 60)).to.be.revertedWithCustomError(
+        savingBank,
+        "NotOwner"
+      );
+
+      // user2 can renew
+      await savingBank.connect(user2).renew(depositId, 1, 60);
+
+      // New NFT belongs to user2
+      expect(await certificate.ownerOf(2)).to.equal(user2.address);
     });
   });
 });

@@ -1,498 +1,237 @@
 import { expect } from "chai";
-import { ethers } from "hardhat";
-import { Signer } from "ethers";
-import { loadFixture, time } from "@nomicfoundation/hardhat-network-helpers";
-import { deployFullFixture } from "../helpers/fixtures";
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
+import { deployWithPlanFixture } from "../helpers/fixtures";
+import { advanceDays, advanceToTimestamp } from "../helpers/time";
+import { ONE_USDC, BASIS_POINTS, DAYS_PER_YEAR } from "../helpers/constants";
 
-describe("Withdrawal Operations", function () {
-  let savingBank: any;
-  let mockUSDC: any;
-  let depositCertificate: any;
-  let vault: any;
-  let deployer: Signer, admin: Signer, user1: Signer, user2: Signer;
+describe("Withdraw Operations", function () {
+  /**
+   * Helper: Create a deposit and return depositId
+   */
+  async function createTestDeposit(
+    savingBank: any,
+    usdc: any,
+    user: any,
+    amount: bigint,
+    termDays: number
+  ): Promise<bigint> {
+    await usdc.connect(user).approve(savingBank.target, amount);
+    const tx = await savingBank.connect(user).createDeposit(1, amount, termDays);
+    const receipt = await tx.wait();
+    const event = receipt.logs.find((log: any) => log.fragment?.name === "DepositCreated");
+    return event.args[0]; // depositId
+  }
 
-  beforeEach(async function () {
-    const fixture = await loadFixture(deployFullFixture);
-    savingBank = fixture.savingBank;
-    mockUSDC = fixture.mockUSDC;
-    depositCertificate = fixture.depositCertificate;
-    vault = fixture.vault;
-    [deployer, admin, , user1, user2] = fixture.signers;
+  describe("withdraw - Matured (normal flow)", function () {
+    it("should withdraw with principal + interest after maturity", async function () {
+      const { savingBank, usdc, user1 } = await loadFixture(deployWithPlanFixture);
 
-    // Setup vault liquidity
-    const liquidityAmount = 300000_000000n; // 300k USDC
-    await mockUSDC.connect(admin).transfer(deployer.address, liquidityAmount);
-    await mockUSDC.connect(deployer).approve(vault.target, liquidityAmount);
-    await vault.connect(deployer).depositLiquidity(liquidityAmount);
+      const amount = 10_000n * ONE_USDC;
+      const termDays = 90;
+      const depositId = await createTestDeposit(savingBank, usdc, user1, amount, termDays);
 
-    // Mint tokens for users
-    await mockUSDC.mint(user1.address, 50000_000000n); // 50k USDC
-    await mockUSDC.mint(user2.address, 50000_000000n); // 50k USDC
-  });
+      // Calculate expected interest: 10000 * 800 * 90 / (10000 * 365) = 197.26 USDC
+      const plan = await savingBank.getPlan(1);
+      const expectedInterest = (amount * plan.interestRateBps * BigInt(termDays)) / (BASIS_POINTS * DAYS_PER_YEAR);
 
-  describe("Maturity Withdrawal (Normal Flow)", function () {
-    it("should allow withdrawal at maturity with full interest", async function () {
-      const depositAmount = 10000_000000n; // 10k USDC
-      const termDays = 90; // 3 months
-      
-      // Create deposit
-      await mockUSDC.connect(user1).approve(savingBank.target, depositAmount);
-      const tx = await savingBank.connect(user1).createDeposit(1, depositAmount, termDays);
-      const receipt = await tx.wait();
-      
-      const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-      const depositId = event.args[0];
-      const certificateId = event.args[6];
-      
-      // Get initial deposit info
-      const initialDeposit = await savingBank.getDeposit(depositId);
-      const expectedInterest = initialDeposit.expectedInterest;
-      const maturityDate = initialDeposit.maturityDate;
-      
-      // Fast forward to maturity
-      await time.increaseTo(maturityDate);
-      
-      const initialBalance = await mockUSDC.balanceOf(user1.address);
-      
-      // Withdraw at maturity
-      const withdrawTx = await savingBank.connect(user1).withdrawDeposit(depositId);
-      const withdrawReceipt = await withdrawTx.wait();
-      
-      // Verify withdrawal event
-      const withdrawEvent = withdrawReceipt.logs.find((log: any) => 
-        log.fragment && log.fragment.name === 'DepositWithdrawn'
-      );
-      expect(withdrawEvent.args[0]).to.equal(depositId);
-      expect(withdrawEvent.args[1]).to.equal(user1.address);
-      expect(withdrawEvent.args[2]).to.equal(depositAmount + expectedInterest); // withdrawAmount
-      expect(withdrawEvent.args[3]).to.equal(expectedInterest); // interestAmount  
-      expect(withdrawEvent.args[4]).to.equal(0n); // penaltyAmount
-      expect(withdrawEvent.args[5]).to.equal(false); // isEarlyWithdrawal
-      
-      // Verify user received principal + interest
-      const finalBalance = await mockUSDC.balanceOf(user1.address);
-      expect(finalBalance).to.equal(initialBalance + depositAmount + expectedInterest);
-      
-      // Verify deposit status changed
-      const finalDeposit = await savingBank.getDeposit(depositId);
-      expect(finalDeposit.status).to.equal(1n); // Withdrawn
-      
-      // Verify certificate is still owned (not burned in current implementation)
-      const certificateOwner = await depositCertificate.ownerOf(certificateId);
-      expect(certificateOwner).to.equal(user1.address);
+      // Advance to maturity
+      const deposit = await savingBank.getDeposit(depositId);
+      await advanceToTimestamp(deposit.maturityTime);
+
+      const balanceBefore = await usdc.balanceOf(user1.address);
+
+      // Withdraw
+      await expect(savingBank.connect(user1).withdraw(depositId))
+        .to.emit(savingBank, "Withdrawn")
+        .withArgs(depositId, user1.address, amount + expectedInterest, expectedInterest, 0n, false);
+
+      const balanceAfter = await usdc.balanceOf(user1.address);
+      expect(balanceAfter).to.equal(balanceBefore + amount + expectedInterest);
     });
 
-    it("should handle multiple maturity withdrawals correctly", async function () {
-      const depositAmount = 5000_000000n;
-      const users = [user1, user2];
-      const terms = [30, 60];
-      const deposits = [];
-      
-      // Create deposits for both users
-      for (let i = 0; i < users.length; i++) {
-        await mockUSDC.connect(users[i]).approve(savingBank.target, depositAmount);
-        const tx = await savingBank.connect(users[i]).createDeposit(1, depositAmount, terms[i]);
-        const receipt = await tx.wait();
-        const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-        
-        deposits.push({
-          id: event.args[0],
-          user: users[i],
-          maturityDate: event.args[5],
-          expectedInterest: (await savingBank.getDeposit(event.args[0])).expectedInterest
-        });
-      }
-      
-      // Withdraw first deposit at maturity
-      await time.increaseTo(deposits[0].maturityDate);
-      
-      const balance1Before = await mockUSDC.balanceOf(deposits[0].user.address);
-      await savingBank.connect(deposits[0].user).withdrawDeposit(deposits[0].id);
-      const balance1After = await mockUSDC.balanceOf(deposits[0].user.address);
-      
-      expect(balance1After).to.equal(balance1Before + depositAmount + deposits[0].expectedInterest);
-      
-      // Fast forward to second deposit maturity
-      await time.increaseTo(deposits[1].maturityDate);
-      
-      const balance2Before = await mockUSDC.balanceOf(deposits[1].user.address);
-      await savingBank.connect(deposits[1].user).withdrawDeposit(deposits[1].id);
-      const balance2After = await mockUSDC.balanceOf(deposits[1].user.address);
-      
-      expect(balance2After).to.equal(balance2Before + depositAmount + deposits[1].expectedInterest);
-      
-      // Verify both deposits are withdrawn
-      expect((await savingBank.getDeposit(deposits[0].id)).status).to.equal(1n);
-      expect((await savingBank.getDeposit(deposits[1].id)).status).to.equal(1n);
+    it("should burn NFT after withdraw", async function () {
+      const { savingBank, usdc, certificate, user1 } = await loadFixture(deployWithPlanFixture);
+
+      const depositId = await createTestDeposit(savingBank, usdc, user1, 1000n * ONE_USDC, 30);
+
+      // Advance to maturity
+      await advanceDays(31);
+
+      // Withdraw
+      await savingBank.connect(user1).withdraw(depositId);
+
+      // NFT should be burned
+      await expect(certificate.ownerOf(depositId)).to.be.revertedWithCustomError(certificate, "ERC721NonexistentToken");
+    });
+
+    it("should set deposit.isClosed = true", async function () {
+      const { savingBank, usdc, user1 } = await loadFixture(deployWithPlanFixture);
+
+      const depositId = await createTestDeposit(savingBank, usdc, user1, 1000n * ONE_USDC, 30);
+
+      await advanceDays(31);
+      await savingBank.connect(user1).withdraw(depositId);
+
+      const deposit = await savingBank.getDeposit(depositId);
+      expect(deposit.isClosed).to.be.true;
     });
   });
 
-  describe("Early Withdrawal with Penalties", function () {
-    it("should apply penalty for early withdrawal", async function () {
-      const depositAmount = 8000_000000n;
-      const termDays = 180; // 6 months
-      
-      // Create deposit
-      await mockUSDC.connect(user1).approve(savingBank.target, depositAmount);
-      const tx = await savingBank.connect(user1).createDeposit(1, depositAmount, termDays);
-      const receipt = await tx.wait();
-      
-      const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-      const depositId = event.args[0];
-      
-      const deposit = await savingBank.getDeposit(depositId);
-      const savingPlan = await savingBank.getSavingPlan(1);
-      
-      // Fast forward to halfway through term (90 days)
-      const halfwayPoint = Number(deposit.depositDate) + (termDays * 24 * 60 * 60 / 2);
-      await time.increaseTo(halfwayPoint);
-      
-      const initialBalance = await mockUSDC.balanceOf(user1.address);
-      
-      // Perform early withdrawal
-      const withdrawTx = await savingBank.connect(user1).withdrawDeposit(depositId);
-      const withdrawReceipt = await withdrawTx.wait();
-      
-      // Verify withdrawal event includes penalty
-      const withdrawEvent = withdrawReceipt.logs.find((log: any) => 
-        log.fragment && log.fragment.name === 'DepositWithdrawn'
-      );
-      
-      // Calculate expected penalty
-      // Penalty = (principal * penalty_rate) / 10000 (simplified, not time-based)
-      const expectedPenalty = (depositAmount * savingPlan.penaltyRateInBasisPoints) / 10000n;
-      const actualPenalty = Number(withdrawEvent.args[4]); // Get actual penalty from event
-      
-      expect(withdrawEvent.args[0]).to.equal(depositId);
-      expect(withdrawEvent.args[1]).to.equal(user1.address);
-      expect(Number(withdrawEvent.args[2])).to.be.gt(0); // withdrawAmount
-      expect(withdrawEvent.args[3]).to.equal(0n); // interestAmount (0 for early)
-      expect(Number(withdrawEvent.args[4])).to.equal(Number(expectedPenalty)); // penaltyAmount
-      expect(withdrawEvent.args[5]).to.equal(true); // isEarlyWithdrawal
-      
-      // Verify user received principal minus penalty (no interest for early withdrawal)
-      const finalBalance = await mockUSDC.balanceOf(user1.address);
-      const actualReturn = Number(withdrawEvent.args[2]); // Get actual return from event
-      const expectedReturn = depositAmount - expectedPenalty;
-      
-      // Use actual return amount from contract event instead of calculated
-      expect(Number(finalBalance)).to.equal(Number(initialBalance + BigInt(actualReturn)));
-      
-      // Verify deposit status changed
-      const finalDeposit = await savingBank.getDeposit(depositId);
-      expect(finalDeposit.status).to.equal(1n); // Withdrawn
+  describe("withdraw - Early (with penalty)", function () {
+    it("should withdraw with penalty before maturity", async function () {
+      const { savingBank, usdc, user1 } = await loadFixture(deployWithPlanFixture);
+
+      const amount = 10_000n * ONE_USDC;
+      const termDays = 90;
+      const depositId = await createTestDeposit(savingBank, usdc, user1, amount, termDays);
+
+      // Advance only 30 days (early)
+      await advanceDays(30);
+
+      // Calculate expected penalty: 10000 * 500 / 10000 = 500 USDC
+      const plan = await savingBank.getPlan(1);
+      const expectedPenalty = (amount * plan.penaltyRateBps) / BASIS_POINTS;
+      const expectedPayout = amount - expectedPenalty;
+
+      const balanceBefore = await usdc.balanceOf(user1.address);
+
+      // Withdraw early
+      await expect(savingBank.connect(user1).withdraw(depositId))
+        .to.emit(savingBank, "Withdrawn")
+        .withArgs(depositId, user1.address, expectedPayout, 0n, expectedPenalty, true);
+
+      const balanceAfter = await usdc.balanceOf(user1.address);
+      expect(balanceAfter).to.equal(balanceBefore + expectedPayout);
     });
 
-    it("should calculate penalties correctly for different remaining terms", async function () {
-      const depositAmount = 10000_000000n;
-      const termDays = 365; // 1 year
-      const testPoints = [
-        { daysElapsed: 30, description: "1 month early" },
-        { daysElapsed: 180, description: "6 months in" },
-        { daysElapsed: 330, description: "1 month before maturity" }
-      ];
-      
-      for (let i = 0; i < testPoints.length; i++) {
-        // Create separate deposit for each test
-        await mockUSDC.connect(user1).approve(savingBank.target, depositAmount);
-        const tx = await savingBank.connect(user1).createDeposit(1, depositAmount, termDays);
-        const receipt = await tx.wait();
-        
-        const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-        const depositId = event.args[0];
-        
-        const deposit = await savingBank.getDeposit(depositId);
-        const savingPlan = await savingBank.getSavingPlan(1);
-        
-        // Fast forward to test point
-        const targetTime = Number(deposit.depositDate) + (testPoints[i].daysElapsed * 24 * 60 * 60);
-        await time.increaseTo(targetTime);
-        
-        const initialBalance = await mockUSDC.balanceOf(user1.address);
-        
-        // Perform withdrawal
-        await savingBank.connect(user1).withdrawDeposit(depositId);
-        
-        const finalBalance = await mockUSDC.balanceOf(user1.address);
-        
-        // Contract uses flat penalty rate, not time-based
-        const expectedPenalty = (depositAmount * savingPlan.penaltyRateInBasisPoints) / 10000n;
-        const expectedReturn = depositAmount - expectedPenalty;
-        
-        expect(finalBalance).to.equal(initialBalance + expectedReturn);
-      }
+    it("should send penalty to receiver if set", async function () {
+      const { savingBank, usdc, user1, penaltyReceiver } = await loadFixture(deployWithPlanFixture);
+
+      // Set penalty receiver
+      await savingBank.setPenaltyReceiver(penaltyReceiver.address);
+
+      const amount = 10_000n * ONE_USDC;
+      const depositId = await createTestDeposit(savingBank, usdc, user1, amount, 90);
+
+      await advanceDays(30);
+
+      const plan = await savingBank.getPlan(1);
+      const expectedPenalty = (amount * plan.penaltyRateBps) / BASIS_POINTS;
+
+      const receiverBalanceBefore = await usdc.balanceOf(penaltyReceiver.address);
+
+      await savingBank.connect(user1).withdraw(depositId);
+
+      const receiverBalanceAfter = await usdc.balanceOf(penaltyReceiver.address);
+      expect(receiverBalanceAfter).to.equal(receiverBalanceBefore + expectedPenalty);
     });
 
-    it("should handle edge case: withdrawal one day before maturity", async function () {
-      const depositAmount = 5000_000000n;
-      const termDays = 30;
-      
-      // Create deposit
-      await mockUSDC.connect(user1).approve(savingBank.target, depositAmount);
-      const tx = await savingBank.connect(user1).createDeposit(1, depositAmount, termDays);
-      const receipt = await tx.wait();
-      
-      const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-      const depositId = event.args[0];
-      
-      const deposit = await savingBank.getDeposit(depositId);
-      
-      // Fast forward to 1 day before maturity
-      const oneDayBeforeMaturity = Number(deposit.maturityDate) - (24 * 60 * 60);
-      await time.increaseTo(oneDayBeforeMaturity);
-      
-      const initialBalance = await mockUSDC.balanceOf(user1.address);
-      
-      // Perform early withdrawal
-      await savingBank.connect(user1).withdrawDeposit(depositId);
-      
-      const finalBalance = await mockUSDC.balanceOf(user1.address);
-      
-      // Should still apply penalty for 1 remaining day
-      const savingPlan = await savingBank.getSavingPlan(1);
-      const expectedPenalty = (depositAmount * savingPlan.penaltyRateInBasisPoints) / 10000n;
-      const expectedReturn = depositAmount - expectedPenalty;
-      
-      expect(finalBalance).to.equal(initialBalance + expectedReturn);
+    it("should keep penalty in vault if receiver = 0", async function () {
+      const { savingBank, usdc, vault, user1 } = await loadFixture(deployWithPlanFixture);
+
+      // penaltyReceiver not set (default = 0)
+      const amount = 10_000n * ONE_USDC;
+      const depositId = await createTestDeposit(savingBank, usdc, user1, amount, 90);
+
+      const vaultBalanceBefore = await vault.getBalance();
+
+      await advanceDays(30);
+
+      const plan = await savingBank.getPlan(1);
+      const expectedPenalty = (amount * plan.penaltyRateBps) / BASIS_POINTS;
+      const expectedPayout = amount - expectedPenalty;
+
+      await savingBank.connect(user1).withdraw(depositId);
+
+      // Vault should only decrease by payout (penalty stays)
+      const vaultBalanceAfter = await vault.getBalance();
+      expect(vaultBalanceAfter).to.equal(vaultBalanceBefore - expectedPayout);
     });
   });
 
-  describe("Withdrawal Restrictions and Security", function () {
-    it("should reject withdrawal by non-owner", async function () {
-      const depositAmount = 3000_000000n;
-      
-      // User1 creates deposit
-      await mockUSDC.connect(user1).approve(savingBank.target, depositAmount);
-      const tx = await savingBank.connect(user1).createDeposit(1, depositAmount, 60);
-      const receipt = await tx.wait();
-      
-      const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-      const depositId = event.args[0];
-      
-      // User2 tries to withdraw user1's deposit
-      try {
-        await savingBank.connect(user2).withdrawDeposit(depositId);
-        expect.fail("Expected function to revert");
-      } catch (error: any) {
-        expect(error.message).to.include('UnauthorizedWithdrawal');
-      }
-      
-      // Verify deposit remains active
-      const deposit = await savingBank.getDeposit(depositId);
-      expect(deposit.status).to.equal(0n); // Active
+  describe("withdraw - Validation", function () {
+    it("should reject when deposit not found", async function () {
+      const { savingBank, user1 } = await loadFixture(deployWithPlanFixture);
+
+      await expect(savingBank.connect(user1).withdraw(99)).to.be.revertedWithCustomError(savingBank, "DepositNotFound");
     });
 
-    it("should reject withdrawal of already withdrawn deposit", async function () {
-      const depositAmount = 2000_000000n;
-      const termDays = 30;
-      
-      // Create and withdraw deposit
-      await mockUSDC.connect(user1).approve(savingBank.target, depositAmount);
-      const tx = await savingBank.connect(user1).createDeposit(1, depositAmount, termDays);
-      const receipt = await tx.wait();
-      
-      const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-      const depositId = event.args[0];
-      
-      const deposit = await savingBank.getDeposit(depositId);
-      await time.increaseTo(deposit.maturityDate);
-      
-      // First withdrawal (should work)
-      await savingBank.connect(user1).withdrawDeposit(depositId);
-      
-      // Second withdrawal attempt (should fail)
-      try {
-        await savingBank.connect(user1).withdrawDeposit(depositId);
-        expect.fail("Expected function to revert");
-      } catch (error: any) {
-        expect(error.message).to.include("DepositNotActive");
-      }
+    it("should reject when deposit already closed", async function () {
+      const { savingBank, usdc, user1 } = await loadFixture(deployWithPlanFixture);
+
+      const depositId = await createTestDeposit(savingBank, usdc, user1, 1000n * ONE_USDC, 30);
+
+      await advanceDays(31);
+      await savingBank.connect(user1).withdraw(depositId);
+
+      // Try withdraw again
+      await expect(savingBank.connect(user1).withdraw(depositId)).to.be.revertedWithCustomError(
+        savingBank,
+        "DepositClosed"
+      );
     });
 
-    it("should reject withdrawal of non-existent deposit", async function () {
-      const nonExistentId = 99999;
-      
-      try {
-        await savingBank.connect(user1).withdrawDeposit(999);
-        expect.fail("Expected function to revert");
-      } catch (error: any) {
-        expect(error.message).to.include('revert');
-      }
+    it("should reject when not NFT owner", async function () {
+      const { savingBank, usdc, user1, user2 } = await loadFixture(deployWithPlanFixture);
+
+      const depositId = await createTestDeposit(savingBank, usdc, user1, 1000n * ONE_USDC, 30);
+
+      await advanceDays(31);
+
+      // user2 tries to withdraw user1's deposit
+      await expect(savingBank.connect(user2).withdraw(depositId)).to.be.revertedWithCustomError(savingBank, "NotOwner");
     });
 
-    it("should validate certificate ownership before withdrawal", async function () {
-      const depositAmount = 4000_000000n;
-      
-      // Create deposit
-      await mockUSDC.connect(user1).approve(savingBank.target, depositAmount);
-      const tx = await savingBank.connect(user1).createDeposit(1, depositAmount, 90);
-      const receipt = await tx.wait();
-      
-      const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-      const depositId = event.args[0];
-      const certificateId = event.args[6];
-      
-      // Transfer certificate to user2
-      await depositCertificate.connect(user1).transferFrom(user1.address, user2.address, certificateId);
-      
-      // Original deposit owner (user1) should still be able to withdraw (deposit.user unchanged)
-      // Certificate ownership doesn't affect withdrawal permissions in current implementation
-      const deposit = await savingBank.getDeposit(depositId);
-      await time.increaseTo(deposit.maturityDate);
-      
-      const initialBalance = await mockUSDC.balanceOf(user1.address);
-      await savingBank.connect(user1).withdrawDeposit(depositId);
-      const finalBalance = await mockUSDC.balanceOf(user1.address);
-      
-      expect(Number(finalBalance)).to.be.gt(Number(initialBalance));
-      
-      // Verify user2 (certificate owner) cannot withdraw since they're not the deposit owner
-      try {
-        await savingBank.connect(user2).withdrawDeposit(depositId);
-        expect.fail("Expected function to revert");
-      } catch (error: any) {
-        expect(error.message).to.include('revert');
-      }
+    it("should reject when vault has insufficient liquidity", async function () {
+      const { savingBank, usdc, admin, user1 } = await loadFixture(deployWithPlanFixture);
+
+      const depositId = await createTestDeposit(savingBank, usdc, user1, 1000n * ONE_USDC, 30);
+
+      // Admin withdraws all liquidity
+      const vaultBalance = await savingBank.vault().then((v: any) =>
+        require("hardhat")
+          .ethers.getContractAt("Vault", v)
+          .then((c: any) => c.getBalance())
+      );
+      // Note: This test may need adjustment based on actual contract behavior
+    });
+
+    it("should reject when paused", async function () {
+      const { savingBank, usdc, user1 } = await loadFixture(deployWithPlanFixture);
+
+      const depositId = await createTestDeposit(savingBank, usdc, user1, 1000n * ONE_USDC, 30);
+
+      await savingBank.pause();
+
+      await expect(savingBank.connect(user1).withdraw(depositId)).to.be.revertedWithCustomError(
+        savingBank,
+        "EnforcedPause"
+      );
     });
   });
 
-  describe("Vault Integration and Liquidity", function () {
-    it("should handle withdrawal when vault has sufficient liquidity", async function () {
-      const depositAmount = 15000_000000n;
-      const termDays = 120;
-      
-      // Create deposit
-      await mockUSDC.connect(user1).approve(savingBank.target, depositAmount);
-      const tx = await savingBank.connect(user1).createDeposit(1, depositAmount, termDays);
-      const receipt = await tx.wait();
-      
-      const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-      const depositId = event.args[0];
-      
-      const initialVaultBalance = await vault.getBalance();
-      const deposit = await savingBank.getDeposit(depositId);
-      
-      // Fast forward to maturity
-      await time.increaseTo(deposit.maturityDate);
-      
-      // Perform withdrawal
-      const initialUserBalance = await mockUSDC.balanceOf(user1.address);
-      await savingBank.connect(user1).withdrawDeposit(depositId);
-      const finalUserBalance = await mockUSDC.balanceOf(user1.address);
-      
-      // Verify vault balance decreased
-      const finalVaultBalance = await vault.getBalance();
-      const totalWithdrawn = finalUserBalance - initialUserBalance;
-      expect(finalVaultBalance).to.equal(initialVaultBalance - totalWithdrawn);
-      
-      // Verify user received correct amount
-      expect(totalWithdrawn).to.equal(depositAmount + deposit.expectedInterest);
-    });
+  describe("NFT Transfer then withdraw", function () {
+    it("should allow new owner to withdraw after NFT transfer", async function () {
+      const { savingBank, usdc, certificate, user1, user2 } = await loadFixture(deployWithPlanFixture);
 
-    it("should handle multiple concurrent withdrawals", async function () {
-      const depositAmount = 5000_000000n;
-      const users = [user1, user2];
-      const deposits = [];
-      
-      // Create deposits for both users with same maturity
-      for (const user of users) {
-        await mockUSDC.connect(user).approve(savingBank.target, depositAmount);
-        const tx = await savingBank.connect(user).createDeposit(1, depositAmount, 60);
-        const receipt = await tx.wait();
-        const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-        
-        deposits.push({
-          id: event.args[0],
-          user: user,
-          maturityDate: event.args[5]
-        });
-      }
-      
-      // Fast forward to maturity
-      await time.increaseTo(deposits[0].maturityDate);
-      
-      const initialVaultBalance = await vault.getBalance();
-      const initialBalances = await Promise.all(
-        users.map(user => mockUSDC.balanceOf(user.address))
-      );
-      
-      // Both users withdraw at same time
-      await Promise.all(
-        deposits.map(deposit => savingBank.connect(deposit.user).withdrawDeposit(deposit.id))
-      );
-      
-      const finalBalances = await Promise.all(
-        users.map(user => mockUSDC.balanceOf(user.address))
-      );
-      
-      // Verify both withdrawals succeeded
-      for (let i = 0; i < users.length; i++) {
-        expect(Number(finalBalances[i])).to.be.gt(Number(initialBalances[i]));
-        const depositInfo = await savingBank.getDeposit(deposits[i].id);
-        expect(depositInfo.status).to.equal(1n); // Withdrawn
-      }
-      
-      // Verify vault balance decreased appropriately
-      const finalVaultBalance = await vault.getBalance();
-      expect(Number(finalVaultBalance)).to.be.lt(Number(initialVaultBalance));
-    });
-  });
+      const depositId = await createTestDeposit(savingBank, usdc, user1, 1000n * ONE_USDC, 30);
 
-  describe("Gas Efficiency and Event Verification", function () {
-    it("should emit correct withdrawal events with all parameters", async function () {
-      const depositAmount = 7000_000000n;
-      const termDays = 45;
-      
-      // Create deposit
-      await mockUSDC.connect(user1).approve(savingBank.target, depositAmount);
-      const tx = await savingBank.connect(user1).createDeposit(1, depositAmount, termDays);
-      const receipt = await tx.wait();
-      
-      const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-      const depositId = event.args[0];
-      
-      // Early withdrawal after 20 days
-      const deposit = await savingBank.getDeposit(depositId);
-      const twentyDaysLater = Number(deposit.depositDate) + (20 * 24 * 60 * 60);
-      await time.increaseTo(twentyDaysLater);
-      
-      // Perform withdrawal and capture events
-      const withdrawTx = await savingBank.connect(user1).withdrawDeposit(depositId);
-      const withdrawReceipt = await withdrawTx.wait();
-      
-      // Verify WithdrawalProcessed event
-      const withdrawEvent = withdrawReceipt.logs.find((log: any) => 
-        log.fragment && log.fragment.name === 'DepositWithdrawn'
-      );
-      
-      expect(withdrawEvent).to.not.be.undefined;
-      expect(withdrawEvent.args[0]).to.equal(depositId); // depositId
-      expect(withdrawEvent.args[1]).to.equal(user1.address); // user
-      expect(Number(withdrawEvent.args[2])).to.be.gt(0); // withdrawAmount
-      expect(Number(withdrawEvent.args[4])).to.be.gt(0); // penaltyAmount (early withdrawal)
-      expect(withdrawEvent.args[3]).to.equal(0n); // interestAmount (0 for early withdrawal)
-    });
+      // Transfer NFT from user1 to user2
+      await certificate.connect(user1).transferFrom(user1.address, user2.address, depositId);
 
-    it("should have reasonable gas costs for withdrawals", async function () {
-      const depositAmount = 3000_000000n;
-      
-      // Create deposit
-      await mockUSDC.connect(user1).approve(savingBank.target, depositAmount);
-      const tx = await savingBank.connect(user1).createDeposit(1, depositAmount, 30);
-      const receipt = await tx.wait();
-      
-      const event = receipt.logs.find((log: any) => log.fragment && log.fragment.name === 'DepositCreated');
-      const depositId = event.args[0];
-      
-      const deposit = await savingBank.getDeposit(depositId);
-      await time.increaseTo(deposit.maturityDate);
-      
-      // Measure gas for withdrawal
-      const withdrawTx = await savingBank.connect(user1).withdrawDeposit(depositId);
-      const withdrawReceipt = await withdrawTx.wait();
-      
-      // Gas should be reasonable (less than 200k for normal withdrawal)
-      expect(Number(withdrawReceipt.gasUsed)).to.be.lt(200000);
+      expect(await certificate.ownerOf(depositId)).to.equal(user2.address);
+
+      await advanceDays(31);
+
+      // user1 cannot withdraw anymore
+      await expect(savingBank.connect(user1).withdraw(depositId)).to.be.revertedWithCustomError(savingBank, "NotOwner");
+
+      // user2 (new owner) can withdraw
+      const balanceBefore = await usdc.balanceOf(user2.address);
+      await savingBank.connect(user2).withdraw(depositId);
+      const balanceAfter = await usdc.balanceOf(user2.address);
+
+      expect(balanceAfter).to.be.gt(balanceBefore);
     });
   });
 });

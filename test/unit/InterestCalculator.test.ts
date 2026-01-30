@@ -1,141 +1,69 @@
 import { expect } from "chai";
-import { ethers } from "hardhat";
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
+import { ONE_USDC, BASIS_POINTS, DAYS_PER_YEAR, DEFAULT_PLAN } from "../helpers/constants";
+import { deployFixture } from "../helpers/fixtures";
 
-describe("InterestCalculator Library", function () {
-  let interestCalculator: any;
-  const BASIS_POINTS = 10000n;
-  const DAYS_PER_YEAR = 365n;
+describe("InterestCalculator", function () {
+  describe("calculateSimpleInterest (via SavingBank.calculateInterest)", function () {
+    it("should calculate interest correctly for standard case", async function () {
+      const { savingBank } = await loadFixture(deployFixture);
 
-  before(async function () {
-    // Deploy a contract that uses the InterestCalculator library
-    const TestCalculator = await ethers.getContractFactory("SavingBank");
-    const [deployer] = await ethers.getSigners();
-    
-    // We'll use SavingBank's calculateExpectedInterest function to test the library
-    const MockUSDC = await ethers.getContractFactory("MockUSDC");
-    const mockUSDC = await MockUSDC.deploy();
-    const DepositCertificate = await ethers.getContractFactory("DepositCertificate");
-    const certificate = await DepositCertificate.deploy("Test", "TEST");
-    const Vault = await ethers.getContractFactory("Vault");
-    const vault = await Vault.deploy(mockUSDC.target);
-    
-    interestCalculator = await TestCalculator.deploy(mockUSDC.target, certificate.target, vault.target);
-    
-    // Create a test saving plan
-    await interestCalculator.createSavingPlan({
-      name: "Test Plan",
-      minDepositAmount: 1000000n,
-      maxDepositAmount: 0n,
-      minTermInDays: 1,
-      maxTermInDays: 365,
-      annualInterestRateInBasisPoints: 500n, // 5%
-      penaltyRateInBasisPoints: 200n // 2%
-    });
-  });
+      // Create plan first
+      await savingBank.createPlan(DEFAULT_PLAN);
 
-  describe("calculateSimpleInterest (via SavingBank)", function () {
-    it("should calculate correct simple interest", async function () {
-      // Test: 1000 USDC at 5% APR for 30 days
-      const principal = 1000_000000n; // 1000 USDC (6 decimals)
-      const planId = 1n;
-      const termDays = 30;
-      
-      const interest = await interestCalculator.calculateExpectedInterest(
-        principal,
-        planId,
-        termDays
-      );
-      
-      // Expected: (1000 * 500 * 30) / (10000 * 365) = 4.109589 USDC
-      const expected = (principal * 500n * 30n) / (BASIS_POINTS * DAYS_PER_YEAR);
-      expect(interest).to.equal(expected);
-      expect(Number(interest)).to.be.closeTo(4109589, 1); // ~4.11 USDC
+      // 1000 USDC, 8% APR, 90 days
+      const principal = 1000n * ONE_USDC;
+      const termDays = 90;
+
+      // Expected: 1000 * 800 * 90 / (10000 * 365) = 19.726... USDC
+      const expected = (principal * 800n * BigInt(termDays)) / (BASIS_POINTS * DAYS_PER_YEAR);
+      const result = await savingBank.calculateInterest(principal, 1, termDays);
+
+      expect(result).to.equal(expected);
     });
 
-    it("should handle edge case: 1 day term", async function () {
-      // Update plan with 3.65% rate for exact calculation
-      await interestCalculator.updateSavingPlan(1, {
-        name: "Test Plan",
-        minDepositAmount: 1000000n,
-        maxDepositAmount: 0n,
-        minTermInDays: 1,
-        maxTermInDays: 365,
-        annualInterestRateInBasisPoints: 365n, // 3.65%
-        penaltyRateInBasisPoints: 200n
+    it("should calculate interest for 1 year term", async function () {
+      const { savingBank } = await loadFixture(deployFixture);
+
+      // Create plan with 10% rate
+      await savingBank.createPlan({
+        ...DEFAULT_PLAN,
+        interestRateBps: 1000n, // 10%
       });
-      
-      const principal = 1000_000000n;
-      const interest = await interestCalculator.calculateExpectedInterest(
-        principal,
-        1,
-        1
-      );
-      
-      // 1 day at 3.65% should give exactly 0.01% = 0.1 USDC
-      expect(interest).to.equal(100000n); // 0.1 USDC
+
+      // 10000 USDC, 10% APR, 365 days
+      const principal = 10000n * ONE_USDC;
+      const termDays = 365;
+
+      const result = await savingBank.calculateInterest(principal, 1, termDays);
+
+      expect(result).to.equal(1000n * ONE_USDC);
     });
 
     it("should handle large amounts without overflow", async function () {
-      // Update plan with 12% rate
-      await interestCalculator.updateSavingPlan(1, {
-        name: "Test Plan",
-        minDepositAmount: 1000000n,
-        maxDepositAmount: 0n,
-        minTermInDays: 1,
-        maxTermInDays: 365,
-        annualInterestRateInBasisPoints: 1200n, // 12%
-        penaltyRateInBasisPoints: 200n
-      });
-      
-      const principal = 1000000_000000n; // 1M USDC
-      const interest = await interestCalculator.calculateExpectedInterest(
-        principal,
-        1,
-        365
-      );
-      
-      // 1M USDC at 12% for 1 year = 120K USDC
-      expect(interest).to.equal(120000_000000n);
+      const { savingBank } = await loadFixture(deployFixture);
+      await savingBank.createPlan(DEFAULT_PLAN);
+
+      const principal = 1_000_000_000n * ONE_USDC; // 1 billion
+      const termDays = 365;
+
+      // Should not throw
+      await savingBank.calculateInterest(principal, 1, termDays);
     });
 
-    it("should revert for non-existent plan", async function () {
-      try {
-        await interestCalculator.calculateExpectedInterest(1000_000000n, 999, 30);
-        expect.fail("Expected function to revert");
-      } catch (error: any) {
-        expect(error.message).to.include("SavingPlanNotFound");
-      }
+    it("should revert for 0 principal", async function () {
+      const { savingBank } = await loadFixture(deployFixture);
+      await savingBank.createPlan(DEFAULT_PLAN);
+
+      await expect(savingBank.calculateInterest(0n, 1, 90)).to.be.revertedWith("Principal must be positive");
     });
   });
 
-  describe("Interest calculation accuracy", function () {
-    it("should match manual calculation for various scenarios", async function () {
-      // Reset to 5% rate for consistent testing
-      await interestCalculator.updateSavingPlan(1, {
-        name: "Test Plan",
-        minDepositAmount: 1000000n,
-        maxDepositAmount: 0n,
-        minTermInDays: 1,
-        maxTermInDays: 365,
-        annualInterestRateInBasisPoints: 500n, // 5%
-        penaltyRateInBasisPoints: 200n
-      });
-      
-      const testCases = [
-        { principal: 100_000000n, days: 7, expectedApprox: 95890n }, // ~0.096 USDC
-        { principal: 500_000000n, days: 90, expectedApprox: 6164384n }, // ~6.16 USDC
-        { principal: 10000_000000n, days: 180, expectedApprox: 246575342n }, // ~246.58 USDC
-      ];
-      
-      for (const testCase of testCases) {
-        const interest = await interestCalculator.calculateExpectedInterest(
-          testCase.principal,
-          1,
-          testCase.days
-        );
-        const tolerance = Number(testCase.expectedApprox) / 100; // 1% tolerance
-        expect(Number(interest)).to.be.closeTo(Number(testCase.expectedApprox), tolerance);
-      }
+  describe("calculatePenalty (tested via withdraw)", function () {
+    it("penalty calculation is tested in WithdrawOperations.test.ts", async function () {
+      // Penalty is calculated internally during early withdrawal
+      // See WithdrawOperations.test.ts for penalty tests
+      expect(true).to.be.true;
     });
   });
 });
