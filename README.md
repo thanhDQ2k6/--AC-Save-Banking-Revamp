@@ -52,26 +52,20 @@ npx hardhat deploy --network localhost
 
 ---
 
-## Triển khai Testnet
+## Deployed Contracts (Sepolia Testnet)
 
-1. Cấu hình file .env:
+> **Deploy Date:** 30/1/2026 | **Status:** ✅ Success | **Network:** Sepolia (chainId: 11155111)
 
-```
-TESTNET_PRIVATE_KEY=<private_key>
-ETHERSCAN_API_KEY=<api_key>
-```
+| Contract           | Address                                      | Etherscan                                                                               |
+| ------------------ | -------------------------------------------- | --------------------------------------------------------------------------------------- |
+| **SavingBank**     | `0x8906C80462cAA66610937D240cd8a4D4Ea51b1dE` | [View](https://sepolia.etherscan.io/address/0x8906C80462cAA66610937D240cd8a4D4Ea51b1dE) |
+| **Vault**          | `0xdeA0F7D168a0A1367550687e80d7Ab85eADcf1d2` | [View](https://sepolia.etherscan.io/address/0xdeA0F7D168a0A1367550687e80d7Ab85eADcf1d2) |
+| DepositCertificate | `0x8d4aa2A5c9E33AE2FF41A6453fE75C99c5ec57B9` | [View](https://sepolia.etherscan.io/address/0x8d4aa2A5c9E33AE2FF41A6453fE75C99c5ec57B9) |
+| MockUSDC           | `0x3d45852a524595B255Dc2b45CF92a45e2c368312` | [View](https://sepolia.etherscan.io/address/0x3d45852a524595B255Dc2b45CF92a45e2c368312) |
 
-2. Deploy:
+**Tất cả contracts đã được verified trên Etherscan** ✅
 
-```bash
-npx hardhat deploy --network sepolia
-```
-
-3. Verify contracts:
-
-```bash
-npx hardhat verify --network sepolia <ADDRESS> [constructor_args]
-```
+📋 Chi tiết: [Deploy History](documents/Deploy_History/1st_attempt.md)
 
 ---
 
