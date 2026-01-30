@@ -10,6 +10,7 @@ node_modules
 /artifacts
 /data
 /data/abi
+data/abi/contracts
 
 # TypeChain files
 /typechain
