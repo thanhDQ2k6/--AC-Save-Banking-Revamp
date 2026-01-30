@@ -77,12 +77,15 @@ npx hardhat verify --network sepolia <ADDRESS> [constructor_args]
 
 ## Tài liệu
 
-| File                                       | Nội dung           |
-| ------------------------------------------ | ------------------ |
-| [QUEST.md](documents/QUEST.md)             | Yêu cầu sản phẩm   |
-| [REQUIREMENT.md](documents/REQUIREMENT.md) | Kiến trúc hệ thống |
-| [PLAN.md](documents/PLAN.md)               | Kế hoạch thực thi  |
-| [TEST.md](documents/TEST.md)               | Checklist kiểm thử |
+| File                                                           | Nội dung           |
+| -------------------------------------------------------------- | ------------------ |
+| [QUEST.md](documents/QUEST.md)                                 | Yêu cầu sản phẩm   |
+| [REQUIREMENT.md](documents/REQUIREMENT.md)                     | Kiến trúc hệ thống |
+| [CONTRACT_ARCHITECTURE.md](documents/CONTRACT_ARCHITECTURE.md) | Sơ đồ contract     |
+| [PLAN.md](documents/PLAN.md)                                   | Kế hoạch thực thi  |
+| [TEST.md](documents/TEST.md)                                   | Checklist kiểm thử |
+| [DEPLOY_PLAN.md](documents/DEPLOY_PLAN.md)                     | Kế hoạch deploy    |
+| [FRONTEND_PLAN.md](documents/FRONTEND_PLAN.md)                 | Kế hoạch frontend  |
 
 ---
 
