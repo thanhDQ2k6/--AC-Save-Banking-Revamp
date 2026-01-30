@@ -2,54 +2,38 @@
 pragma solidity ^0.8.28;
 
 interface ISavingBankStructs {
-    enum DepositStatus {
-        Active,
-        Withdrawn,
-        Renewed
-    }
-
+    /// @notice Gói tiết kiệm
     struct SavingPlan {
         uint256 id;
         string name;
-        uint256 minDepositAmount;
-        uint256 maxDepositAmount;
-        uint32 minTermInDays;
-        uint32 maxTermInDays;
-        uint256 annualInterestRateInBasisPoints;
-        uint256 penaltyRateInBasisPoints;
+        uint256 minAmount;
+        uint256 maxAmount;         // 0 = unlimited
+        uint32 minTermDays;
+        uint32 maxTermDays;
+        uint256 interestRateBps;   // annual, basis points
+        uint256 penaltyRateBps;    // early withdrawal penalty
         bool isActive;
     }
 
-    struct SavingPlanInput {
+    /// @notice Input để tạo/cập nhật plan
+    struct PlanInput {
         string name;
-        uint256 minDepositAmount;
-        uint256 maxDepositAmount;
-        uint32 minTermInDays;
-        uint32 maxTermInDays;
-        uint256 annualInterestRateInBasisPoints;
-        uint256 penaltyRateInBasisPoints;
+        uint256 minAmount;
+        uint256 maxAmount;
+        uint32 minTermDays;
+        uint32 maxTermDays;
+        uint256 interestRateBps;
+        uint256 penaltyRateBps;
     }
 
+    /// @notice Sổ tiết kiệm - owner lấy từ NFT ownerOf(id)
     struct Deposit {
         uint256 id;
-        address user;
-        uint256 savingPlanId;
-        uint256 amount;
-        uint32 termInDays;
-        uint256 expectedInterest;
-        uint256 depositDate;
-        uint256 maturityDate;
-        DepositStatus status;
-    }
-
-    // Legacy support
-    struct DepositRecord {
-        uint256 depositId;
-        address depositor;
         uint256 planId;
-        uint256 principalAmount;
-        uint64 depositTimestamp;
-        uint64 maturityTimestamp;
+        uint256 amount;
+        uint32 termDays;
+        uint256 startTime;
+        uint256 maturityTime;
         bool isClosed;
     }
 }

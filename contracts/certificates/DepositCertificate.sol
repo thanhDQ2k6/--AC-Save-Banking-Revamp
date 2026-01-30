@@ -72,8 +72,18 @@ contract DepositCertificate is ERC721, ERC721Enumerable, AccessControl, IDeposit
      * 
      * Requirements:
      * - Certificate for this depositId must exist
-     * 
-     * Note: Currently not used in SavingBank (certificates remain after withdrawal)
+     */
+    function burn(uint256 depositId) external onlyRole(MINTER_ROLE) {
+        require(_depositExists[depositId], "Certificate does not exist");
+        
+        _depositExists[depositId] = false;
+        _burn(depositId);
+    }
+
+    /**
+     * @notice Burns a certificate NFT when deposit is closed (legacy name)
+     * @dev Only callable by addresses with MINTER_ROLE
+     * @param depositId The deposit ID whose certificate will be burned
      */
     function burnCertificate(uint256 depositId) external onlyRole(MINTER_ROLE) {
         require(_depositExists[depositId], "Certificate does not exist");
