@@ -1,134 +1,96 @@
-# Saving Banking - Kiến Trúc Hệ Thống
+# Saving Banking - Yêu Cầu Sản Phẩm
 
-Tài liệu mô tả cấu trúc kỹ thuật của hệ thống, bao gồm các thành phần, quan hệ giữa chúng, và cấu trúc dữ liệu.
-
----
-
-## 1. Tổng quan
-
-Hệ thống gồm 4 thành phần chính:
-
-| Thành phần         | Vai trò                                                    |
-| ------------------ | ---------------------------------------------------------- |
-| SavingBank         | Điều phối nghiệp vụ chính (gói tiết kiệm, gửi/rút/gia hạn) |
-| Vault              | Quản lý quỹ thanh khoản để trả lãi                         |
-| DepositCertificate | NFT đại diện quyền sở hữu sổ tiết kiệm                     |
-| InterestCalculator | Thư viện tính toán lãi suất                                |
-
-Tách riêng từng thành phần để:
-
-- Vault bị tấn công không ảnh hưởng logic SavingBank
-- NFT có thể nâng cấp độc lập
-- Thư viện tính toán dễ kiểm tra và tái sử dụng
+Hệ thống tiết kiệm ngân hàng trên blockchain cho phép người dùng gửi tiền có kỳ hạn và nhận lãi suất.
 
 ---
 
-## 2. Quan hệ giữa các thành phần
+## 1. Đối tượng sử dụng
+
+**User (Bất kỳ ai)**
+
+- Mở sổ tiết kiệm với gói và số tiền tùy chọn
+- Tất toán khi đáo hạn để nhận gốc và lãi
+- Rút trước hạn (chịu phí phạt)
+- Gia hạn sổ tiết kiệm khi đến hạn
+
+**Admin (Deployer)**
+
+- Tạo và cấu hình các gói tiết kiệm
+- Nạp/rút vốn từ quỹ thanh khoản (Vault)
+- Tạm dừng hệ thống khi cần thiết
+
+---
+
+## 2. Đơn vị thanh toán
+
+ERC20 Stablecoin (USDC) với 6 decimals.
+
+---
+
+## 3. Các tính năng chính
+
+### 3.1 Quản lý gói tiết kiệm
+
+Admin tạo các gói với thông số:
+
+| Thông số        | Mô tả                             |
+| --------------- | --------------------------------- |
+| name            | Tên gói                           |
+| minAmount       | Số tiền gửi tối thiểu             |
+| maxAmount       | Số tiền gửi tối đa (0 = no limit) |
+| minTermDays     | Kỳ hạn tối thiểu (ngày)           |
+| maxTermDays     | Kỳ hạn tối đa (ngày)              |
+| interestRateBps | Lãi suất năm (800 = 8%)           |
+| penaltyRateBps  | Tỷ lệ phạt rút sớm (500 = 5%)     |
+
+### 3.2 Mở sổ tiết kiệm
+
+User chọn gói và số tiền gửi. Hệ thống:
+
+1. Nhận tiền gốc từ User
+2. Chuyển tiền vào Vault
+3. Mint NFT đại diện quyền sở hữu
+
+### 3.3 Tất toán đúng hạn
+
+Khi đáo hạn, User nhận lại tiền gốc + lãi.
 
 ```
-User
-  │
-  ▼
-SavingBank ──uses──► InterestCalculator (library)
-  │
-  ├──calls──► Vault (chuyển tiền gốc vào, rút tiền + lãi ra)
-  │
-  └──calls──► DepositCertificate (mint NFT khi mở sổ, burn khi tất toán)
+Interest = Principal × APR(bps) × Days / (365 × 10000)
 ```
 
-Luồng hoạt động:
+### 3.4 Rút tiền trước hạn
 
-1. User gọi SavingBank để mở sổ tiết kiệm
-2. SavingBank nhận tiền từ User, chuyển vào Vault
-3. SavingBank gọi DepositCertificate mint NFT cho User
-4. Khi rút tiền, SavingBank tính lãi bằng InterestCalculator
-5. SavingBank gọi Vault rút tiền gốc + lãi trả User
-6. SavingBank burn NFT
-
----
-
-## 3. Cấu trúc dữ liệu
-
-### 3.1 Gói tiết kiệm (SavingPlan)
-
-Định nghĩa các thông số cho một loại sản phẩm tiết kiệm.
-
-| Field                     | Type    | Ý nghĩa                                      |
-| ------------------------- | ------- | -------------------------------------------- |
-| name                      | string  | Tên gói (hiển thị)                           |
-| interestRateBps           | uint256 | Lãi suất năm, đơn vị basis points (100 = 1%) |
-| minTermInDays             | uint256 | Kỳ hạn tối thiểu (ngày)                      |
-| maxTermInDays             | uint256 | Kỳ hạn tối đa (ngày)                         |
-| minDepositAmount          | uint256 | Số tiền gửi tối thiểu                        |
-| maxDepositAmount          | uint256 | Số tiền gửi tối đa                           |
-| earlyWithdrawalPenaltyBps | uint256 | Phí phạt rút sớm (basis points)              |
-| isActive                  | bool    | Gói còn hoạt động không                      |
-
-### 3.2 Sổ tiết kiệm (Deposit)
-
-Thông tin một khoản gửi cụ thể của người dùng.
-
-| Field            | Type          | Ý nghĩa                                  |
-| ---------------- | ------------- | ---------------------------------------- |
-| planId           | uint256       | ID gói tiết kiệm đã chọn                 |
-| principal        | uint256       | Số tiền gốc                              |
-| startTime        | uint256       | Thời điểm bắt đầu (timestamp)            |
-| maturityTime     | uint256       | Thời điểm đáo hạn (timestamp)            |
-| interestRateBps  | uint256       | Lãi suất tại thời điểm mở (snapshot)     |
-| expectedInterest | uint256       | Lãi dự kiến khi đáo hạn                  |
-| status           | DepositStatus | Trạng thái: Active / Withdrawn / Renewed |
-
-### 3.3 Trạng thái sổ tiết kiệm (DepositStatus)
+User không nhận lãi và chịu phí phạt.
 
 ```
-Active    - Đang hoạt động, chưa tất toán
-Withdrawn - Đã rút tiền (đúng hạn hoặc sớm)
-Renewed   - Đã gia hạn sang sổ mới
+Penalty = Principal × PenaltyRate(bps) / 10000
+Payout = Principal - Penalty
 ```
 
----
+### 3.5 Gia hạn sổ tiết kiệm
 
-## 4. Phân quyền
-
-Hệ thống sử dụng Role-Based Access Control với các vai trò:
-
-| Role              | Quyền hạn                                             |
-| ----------------- | ----------------------------------------------------- |
-| DEFAULT_ADMIN     | Cấp/thu hồi các role khác                             |
-| ADMIN             | Tạo/cập nhật gói tiết kiệm, cấu hình penalty receiver |
-| PAUSER            | Tạm dừng/mở lại hệ thống                              |
-| LIQUIDITY_MANAGER | Nạp/rút vốn từ Vault                                  |
-| MINTER            | Mint NFT (chỉ SavingBank có quyền này)                |
-| WITHDRAW          | Rút tiền từ Vault (chỉ SavingBank có quyền này)       |
-
-Nguyên tắc: Mỗi role chỉ có quyền tối thiểu cần thiết. SavingBank được cấp MINTER và WITHDRAW để thực hiện nghiệp vụ, Admin không có quyền rút tiền trực tiếp từ Vault.
+Khi đến hạn, User gộp gốc + lãi thành tiền gốc mới cho kỳ tiếp theo.
 
 ---
 
-## 5. Bảo mật
+## 4. Sự kiện (Events)
 
-Các cơ chế bảo vệ:
-
-| Cơ chế          | Mục đích                                           |
-| --------------- | -------------------------------------------------- |
-| ReentrancyGuard | Chống tấn công reentrancy trên các hàm chuyển tiền |
-| Pausable        | Dừng khẩn cấp khi phát hiện vấn đề                 |
-| SafeERC20       | Xử lý an toàn các token ERC20 không chuẩn          |
-| Access Control  | Phân quyền chặt chẽ từng chức năng                 |
-| Ownership check | Kiểm tra quyền sở hữu NFT trước khi rút/gia hạn    |
+| Event          | Khi nào emit            |
+| -------------- | ----------------------- |
+| PlanCreated    | Admin tạo gói mới       |
+| PlanUpdated    | Admin cập nhật gói      |
+| DepositCreated | User mở sổ tiết kiệm    |
+| Withdrawn      | User rút tiền           |
+| Renewed        | User gia hạn sổ         |
+| VaultDeposited | Admin nạp vốn vào Vault |
+| VaultWithdrawn | Admin rút vốn từ Vault  |
 
 ---
 
-## 6. Nguyên tắc thiết kế
+## 5. Quy tắc nghiệp vụ
 
-Hệ thống tuân theo các nguyên tắc:
-
-1. **Single Responsibility**: Mỗi contract làm một việc (SavingBank = logic, Vault = giữ tiền, Certificate = ownership)
-
-2. **Dependency Injection**: SavingBank nhận địa chỉ Vault và Certificate qua constructor, dễ thay thế khi test
-
-3. **Interface Segregation**: Tách interface theo chức năng (Admin, User, View) để client chỉ phụ thuộc những gì cần
-
-4. **Guard Clauses**: Kiểm tra điều kiện và return/revert sớm, tránh nested if-else sâu
-
-5. **Custom Errors**: Dùng error thay vì require string để tiết kiệm gas và rõ ràng hơn
+- Mỗi sổ có ID duy nhất, đại diện bằng NFT (ERC721)
+- NFT có thể chuyển nhượng, người sở hữu có quyền rút tiền
+- Vault cần đủ thanh khoản để trả lãi
+- Penalty có thể gửi đến địa chỉ cấu hình hoặc giữ lại Vault
