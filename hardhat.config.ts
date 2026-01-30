@@ -35,10 +35,10 @@ const reportGas = process.env.REPORT_GAS;
 module.exports = {
   networks: {
     sepolia: {
-      url: "https://eth-sepolia.public.blastapi.io",
+      url: `https://sepolia.infura.io/v3/${process.env.INFURA_API_KEY}`,
       chainId: 11155111,
       accounts: testnetPrivateKey ? [testnetPrivateKey] : [],
-      timeout: 40000,
+      timeout: 60000,
     },
   },
   solidity: {
@@ -72,14 +72,11 @@ module.exports = {
     runOnCompile: true,
   },
   etherscan: {
-    apiKey: {
-      sepolia: process.env.ETHERSCAN_API_KEY || "",
-    },
+    // V2 API - single key for all networks
+    apiKey: process.env.ETHERSCAN_API_KEY || "",
   },
   sourcify: {
-    // Disabled by default
-    // Doesn't need an API key
-    enabled: false,
+    enabled: true,
   },
   mocha: {
     timeout: 40000,

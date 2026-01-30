@@ -6,10 +6,19 @@
     "compile": "hardhat compile",
     "test": "hardhat test",
     "hardhat": "hardhat",
-    "node": "hardhat node",
+    "node": "hardhat node --no-deploy",
     "size": "hardhat size-contracts",
     "clean": "hardhat clean",
-    "run:sepolia": "hardhat run --network sepolia"
+    "run:sepolia": "hardhat run --network sepolia",
+    "test:manual": "hardhat run scripts/manual-tests/run-all.ts --network localhost",
+    "test:deploy": "hardhat run scripts/manual-tests/01-deploy.ts --network localhost",
+    "test:deposit": "hardhat run scripts/manual-tests/02-deposit.ts --network localhost",
+    "test:withdraw-early": "hardhat run scripts/manual-tests/03-withdraw-early.ts --network localhost",
+    "test:withdraw-matured": "hardhat run scripts/manual-tests/04-withdraw-matured.ts --network localhost",
+    "test:renew": "hardhat run scripts/manual-tests/05-renew.ts --network localhost",
+    "test:nft": "hardhat run scripts/manual-tests/06-nft-transfer.ts --network localhost",
+    "test:admin": "hardhat run scripts/manual-tests/07-admin-functions.ts --network localhost",
+    "test:errors": "hardhat run scripts/manual-tests/08-error-cases.ts --network localhost"
   },
   "license": "ISC",
   "devDependencies": {
