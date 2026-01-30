@@ -1,6 +1,5 @@
 import { HardhatRuntimeEnvironment } from "hardhat/types";
 import { DeployFunction } from "hardhat-deploy/types";
-import { ethers } from "hardhat";
 
 const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
   const { deployments, getNamedAccounts } = hre;
@@ -25,18 +24,7 @@ const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
 
   console.log("");
   console.log("Vault deployed:", deployment.address);
-
-  // Grant LIQUIDITY_MANAGER_ROLE to deployer
-  console.log("");
-  console.log("Setting up roles...");
-  const vault = await ethers.getContractAt("Vault", deployment.address);
-  const LIQUIDITY_MANAGER_ROLE = await vault.LIQUIDITY_MANAGER_ROLE();
-  const tx = await vault.grantRole(LIQUIDITY_MANAGER_ROLE, deployer);
-  await tx.wait();
-  console.log("  LIQUIDITY_MANAGER_ROLE -> deployer");
-
-  console.log("");
-  console.log("Vault setup complete");
+  console.log("(setSavingBank will be called in SavingBank deploy script)");
   console.log("");
 
   return true;

@@ -32,29 +32,23 @@ const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
   console.log("");
   console.log("SavingBank deployed:", deployment.address);
 
-  // Setup role permissions
+  // Setup permissions
   console.log("");
-  console.log("Setting up roles...");
+  console.log("Setting up permissions...");
 
   const vaultContract = await ethers.getContractAt("Vault", vault.address);
   const depositCert = await ethers.getContractAt("DepositCertificate", depositCertificate.address);
 
-  // Vault roles
-  const LIQUIDITY_MANAGER_ROLE = await vaultContract.LIQUIDITY_MANAGER_ROLE();
-  let tx = await vaultContract.grantRole(LIQUIDITY_MANAGER_ROLE, deployment.address);
+  // Vault: setSavingBank (only SavingBank can call deposit/withdraw)
+  let tx = await vaultContract.setSavingBank(deployment.address);
   await tx.wait();
-  console.log("  Vault: LIQUIDITY_MANAGER_ROLE -> SavingBank");
+  console.log("  Vault.setSavingBank() -> SavingBank");
 
-  const WITHDRAW_ROLE = await vaultContract.WITHDRAW_ROLE();
-  tx = await vaultContract.grantRole(WITHDRAW_ROLE, deployment.address);
-  await tx.wait();
-  console.log("  Vault: WITHDRAW_ROLE -> SavingBank");
-
-  // Certificate roles
+  // Certificate: grant MINTER_ROLE to SavingBank
   const MINTER_ROLE = await depositCert.MINTER_ROLE();
   tx = await depositCert.grantRole(MINTER_ROLE, deployment.address);
   await tx.wait();
-  console.log("  Certificate: MINTER_ROLE -> SavingBank");
+  console.log("  Certificate.grantRole(MINTER_ROLE) -> SavingBank");
 
   // Summary
   console.log("");
