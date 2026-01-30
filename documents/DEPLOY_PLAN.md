@@ -8,148 +8,132 @@
 - `npx hardhat compile` thành công
 - `npx hardhat test` pass 91/91
 
-### Tài khoản
+### Tài khoản cần có
 
-| Mục               | Nguồn                         |
-| ----------------- | ----------------------------- |
-| Deployer wallet   | Tạo ví mới hoặc dùng ví test  |
-| Sepolia ETH       | https://sepoliafaucet.com     |
-| Etherscan API key | https://etherscan.io/myapikey |
+| Mục               | Nguồn                                            |
+| ----------------- | ------------------------------------------------ |
+| Deployer wallet   | Tạo ví mới hoặc dùng ví test                     |
+| Sepolia ETH       | https://www.alchemy.com/faucets/ethereum-sepolia |
+| Etherscan API key | https://etherscan.io/myapikey                    |
+| Infura API key    | https://app.infura.io/                           |
 
 ### File .env
 
-```
+```bash
 TESTNET_PRIVATE_KEY=<private_key_without_0x>
-ETHERSCAN_API_KEY=<your_api_key>
+ETHERSCAN_API_KEY=<your_etherscan_api_key>
+INFURA_API_KEY=<your_infura_api_key>
 ```
 
 ---
 
 ## 2. Deploy
 
-### Thứ tự deploy
-
-```
-1. MockUSDC            (không phụ thuộc)
-2. DepositCertificate  (không phụ thuộc)
-3. Vault               (phụ thuộc MockUSDC)
-4. SavingBank          (phụ thuộc tất cả)
-```
-
-### Chạy deploy
+### Step 1: Deploy Contracts
 
 ```bash
 npx hardhat deploy --network sepolia
 ```
 
-### Ghi nhận địa chỉ
+Deploy tự động theo thứ tự: MockUSDC → DepositCertificate → Vault → SavingBank
 
-| Contract           | Address | Verified |
-| ------------------ | ------- | -------- |
-| MockUSDC           |         | [ ]      |
-| DepositCertificate |         | [ ]      |
-| Vault              |         | [ ]      |
-| SavingBank         |         | [ ]      |
+Sau deploy, script tự động:
 
----
+- `Vault.setSavingBank(savingBankAddress)`
+- `Certificate.grantRole(MINTER_ROLE, savingBankAddress)`
 
-## 3. Post-Deploy Setup
+### Step 2: Setup (Plans, Vault Funding)
 
-### Tự động (trong deploy script)
-
-1. `Vault.setSavingBank(savingBankAddress)`
-2. `Certificate.grantRole(MINTER_ROLE, savingBankAddress)`
-
-### Manual (qua Etherscan hoặc script)
-
-1. Tạo Saving Plan đầu tiên:
-
-```javascript
-await savingBank.createPlan({
-  name: "Standard 30 Days",
-  minAmount: 100_000_000n, // 100 USDC
-  maxAmount: 0n, // no limit
-  minTermDays: 30,
-  maxTermDays: 365,
-  interestRateBps: 800n, // 8% APR
-  penaltyRateBps: 500n, // 5% penalty
-});
+```bash
+npx hardhat run scripts/sepolia/setup.ts --network sepolia
 ```
 
-2. Nạp vốn vào Vault:
+Script thực hiện:
 
-```javascript
-await usdc.approve(savingBank.target, amount);
-await savingBank.depositToVault(amount);
-```
+1. Tạo 2 saving plans (Standard & Premium)
+2. Set penalty receiver = deployer (đổi sang treasury wallet cho production)
+3. Mint test USDC cho deployer
+4. Fund vault với 100,000 USDC
 
----
-
-## 4. Verify Contracts
+### Step 3: Verify Contracts
 
 ```bash
 # MockUSDC
-npx hardhat verify --network sepolia <ADDRESS>
+npx hardhat verify --network sepolia <USDC_ADDRESS>
 
 # DepositCertificate
-npx hardhat verify --network sepolia <ADDRESS> "SavingBank Deposit Certificate" "SBDC"
+npx hardhat verify --network sepolia <CERT_ADDRESS> "SavingBank Deposit Certificate" "SBDC"
 
 # Vault
-npx hardhat verify --network sepolia <ADDRESS> <USDC_ADDRESS>
+npx hardhat verify --network sepolia <VAULT_ADDRESS> <USDC_ADDRESS>
 
 # SavingBank
-npx hardhat verify --network sepolia <ADDRESS> <USDC> <CERTIFICATE> <VAULT>
+npx hardhat verify --network sepolia <BANK_ADDRESS> <USDC_ADDRESS> <CERT_ADDRESS> <VAULT_ADDRESS>
 ```
 
 ---
 
-## 5. Test trên Testnet
+## 3. Test
 
-### Test cơ bản
+### Test trên Sepolia
 
-| Test           | Mô tả                            | Status |
-| -------------- | -------------------------------- | ------ |
-| Mint USDC      | Mint test USDC cho user          | [ ]    |
-| Approve        | User approve USDC cho SavingBank | [ ]    |
-| Create Deposit | Tạo deposit                      | [ ]    |
-| Check NFT      | User nhận được NFT               | [ ]    |
-| View functions | getPlan, getDeposit hoạt động    | [ ]    |
+```bash
+npx hardhat run scripts/sepolia/test.ts --network sepolia
+```
 
-### Test flow
+### Debug (nếu cần)
 
-| Flow             | Các bước                  | Status |
-| ---------------- | ------------------------- | ------ |
-| Happy path       | Deposit → wait → Withdraw | [ ]    |
-| Early withdrawal | Deposit → Withdraw sớm    | [ ]    |
-| Renew            | Deposit → wait → Renew    | [ ]    |
+```bash
+npx hardhat run scripts/sepolia/debug.ts --network sepolia
+```
+
+### Test local (full suite)
+
+```bash
+# Terminal 1
+npx hardhat node
+
+# Terminal 2
+npx hardhat run scripts/manual-tests/run-all.ts --network localhost
+```
 
 ---
 
-## 6. Troubleshooting
+## 4. Troubleshooting
 
-| Lỗi                   | Nguyên nhân    | Giải pháp          |
-| --------------------- | -------------- | ------------------ |
-| Insufficient funds    | Thiếu ETH      | Lấy thêm từ faucet |
-| Nonce too low         | Tx pending     | Đợi hoặc cancel tx |
-| Gas estimation failed | Contract error | Kiểm tra lại code  |
-| Already verified      | Đã verify rồi  | Bỏ qua             |
-
-### Khẩn cấp
-
-1. `savingBank.pause()` - Dừng hệ thống
-2. Phân tích vấn đề
-3. Fix và deploy lại nếu cần
+| Lỗi                   | Nguyên nhân        | Giải pháp              |
+| --------------------- | ------------------ | ---------------------- |
+| Insufficient funds    | Thiếu ETH          | Lấy thêm từ faucet     |
+| Nonce too low         | Tx pending         | Đợi hoặc cancel tx     |
+| Gas estimation failed | Contract error     | Kiểm tra lại input     |
+| Already verified      | Đã verify rồi      | Bỏ qua                 |
+| PRIVATE_KEY not found | Chưa setup .env    | Thêm key vào .env      |
+| RPC rate limit        | Quá nhiều requests | Đợi 1 phút rồi thử lại |
 
 ---
 
-## 7. Deployed Addresses
+## 5. Architecture
 
 ```
-Network: Sepolia (chainId: 11155111)
-Deploy Date: ____/____/____
-
-MockUSDC: 0x...
-DepositCertificate: 0x...
-Vault: 0x...
-SavingBank: 0x...
+┌─────────────────┐
+│    User/Admin   │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐      ┌───────────────────┐
+│   SavingBank    │◄────►│ DepositCertificate│
+│  (Main Logic)   │      │    (NFT ERC721)   │
+└────────┬────────┘      └───────────────────┘
+         │
+         ▼
+┌─────────────────┐      ┌─────────────────┐
+│     Vault       │◄────►│    MockUSDC     │
+│  (Liquidity)    │      │    (ERC20)      │
+└─────────────────┘      └─────────────────┘
 ```
+
+**Roles:**
+
+- **Admin** (deployer): createPlan, pause, setPenaltyReceiver
+- **User** (anyone): createDeposit, withdraw, renew
+- **NFT Owner**: Ai giữ NFT = chủ sở hữu deposit
