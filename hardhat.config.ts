@@ -1,6 +1,7 @@
 import { task } from "hardhat/config";
 import "@openzeppelin/hardhat-upgrades";
 import "@nomicfoundation/hardhat-verify";
+import "@nomicfoundation/hardhat-chai-matchers";
 import "hardhat-contract-sizer";
 import "hardhat-abi-exporter";
 import "hardhat-gas-reporter";
@@ -22,9 +23,7 @@ task("accounts", "Prints the list of accounts", async (taskArgs, hre) => {
   }
 });
 
-const {
-  TESTNET_PRIVATE_KEY: testnetPrivateKey,
-} = process.env;
+const { TESTNET_PRIVATE_KEY: testnetPrivateKey } = process.env;
 const reportGas = process.env.REPORT_GAS;
 
 // You need to export an object to set up your config
@@ -51,9 +50,9 @@ module.exports = {
             enabled: true,
             runs: 1000,
           },
-          viaIR: true
+          viaIR: true,
         },
-      }
+      },
     ],
   },
   abiExporter: {
@@ -75,7 +74,7 @@ module.exports = {
   etherscan: {
     apiKey: {
       sepolia: process.env.ETHERSCAN_API_KEY || "",
-    }
+    },
   },
   sourcify: {
     // Disabled by default
