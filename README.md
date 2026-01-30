@@ -1,154 +1,91 @@
-# AC Saving Banking System
+# Saving Banking
 
-🏦 **Production-Ready Saving Banking Smart Contract System**
+Hệ thống tiết kiệm ngân hàng trên blockchain. Người dùng gửi tiền có kỳ hạn và nhận lãi suất, tài sản được quản lý bởi smart contract.
 
-A comprehensive DeFi saving banking platform implementing Clean Code principles, modular design, and proper separation of concerns between business logic and liquidity management.
+---
 
-## 🏗️ Architecture Overview
+## Tổng quan
 
-### **Vault Separation Pattern**
-- **SavingBank Contract**: Handles business logic (saving plans, deposits, interest calculations)
-- **Vault Contract**: Manages liquidity operations (token storage, withdrawals, access control)
-- **DepositCertificate Contract**: ERC721 NFTs representing deposit ownership
-- **MockUSDC Contract**: Test USDC token with 6 decimals for development
+Hệ thống cho phép:
 
-### **Key Features**
-- ✅ **Modular Architecture**: Clean separation between business logic and vault operations
-- ✅ **Role-Based Access Control**: Granular permissions for different operations
-- ✅ **Interest Calculation**: Flexible interest rates with penalty system
-- ✅ **NFT Certificates**: Each deposit represented by a unique NFT
-- ✅ **Clean Code Compliance**: SOLID principles, no abbreviations, guard clauses
-- ✅ **Comprehensive Testing**: Complete test coverage with 76/76 tests passing
+- Người dùng mở sổ tiết kiệm, chọn gói và kỳ hạn
+- Rút tiền khi đáo hạn (nhận gốc + lãi) hoặc rút sớm (chịu phạt)
+- Gia hạn sổ tiết kiệm với lãi kép
+- Admin tạo các gói tiết kiệm và quản lý quỹ thanh khoản
 
-## 📊 **Project Status**
+Mỗi khoản gửi được đại diện bằng NFT (ERC721), có thể chuyển nhượng.
 
-**Current Status**: 🎉 **CORE IMPLEMENTATION COMPLETE (Production Ready)**
-- **Smart Contracts**: ✅ 100% Complete (90/90 tests passing)
-- **NatSpec Documentation**: ✅ All contracts fully documented
-- **Business Logic**: ✅ All core functions implemented and validated
-- **Renewal Operations**: ✅ Compound interest system with rollover functionality  
-- **Admin Functions**: ✅ Complete plan management and penalty routing
-- **Security**: ✅ Role-based access control, ownership validation
-- **Ready for**: Testnet deployment and frontend integration
+---
 
-### **Production Status**
-```bash
-✅ Smart Contract Implementation : 100% Complete
-✅ NatSpec Documentation         : All 4 contracts fully documented
-✅ Core Business Logic           : renewDeposit, admin functions implemented  
-✅ Testing Coverage              : 90/90 tests passing (76 unit + 14 integration)
-✅ Etherscan Verification        : Configured and documented
-✅ Security Validation           : Access control, ownership verified
-✅ Deployment Ready              : Local Hardhat deployment successful
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🎉 STATUS: PRODUCTION READY FOR TESTNET DEPLOYMENT
-```
-
-### **Next Phase: Production Deployment**
-
-With core implementation complete, the project is ready for:
-
-1. **Testnet Deployment**: Deploy contracts to Sepolia/Goerli with verification
-2. **Frontend Development**: Web3 interface for user interactions
-3. **Security Audit**: External audit preparation and documentation
-4. **Mainnet Launch**: Production deployment with monitoring systems
-
-All core business logic is implemented and fully tested.
-
-## 📁 Project Structure
+## Cấu trúc
 
 ```
 contracts/
-├── interfaces/                 # Contract interfaces
-├── libraries/                  # Pure calculation functions
-├── tokens/                     # Test tokens
-├── certificates/               # ERC721 deposit certificates
-├── vault/                      # Liquidity management
-└── SavingBank.sol             # Main business logic
+├── SavingBank.sol          # Logic nghiệp vụ chính
+├── vault/Vault.sol         # Quản lý quỹ thanh khoản
+├── certificates/           # NFT đại diện sổ tiết kiệm
+├── libraries/              # Thư viện tính lãi suất
+├── interfaces/             # Các interface
+└── tokens/MockUSDC.sol     # Token test
 
-deploy/                        # Hardhat deployment scripts
-test/                          # Comprehensive test suite  
-documents/                     # Project documentation
+deploy/                     # Scripts triển khai
+test/                       # Test cases
+documents/                  # Tài liệu dự án
 ```
 
-## 🚀 Quick Start
+---
 
-### Installation
+## Cài đặt
+
 ```bash
-# Install dependencies
-npm install
-
-# Compile contracts
+npm install --legacy-peer-deps
 npx hardhat compile
-
-# Run tests
 npx hardhat test
+```
 
-# Deploy locally
+Chạy local:
+
+```bash
 npx hardhat node
 npx hardhat deploy --network localhost
 ```
 
-### Deployment to Testnet (Sepolia)
+---
 
-1. **Configure Environment**
-```bash
-# Copy example env file
-cp .env.example .env
+## Triển khai Testnet
 
-# Edit .env with your values:
-# - TESTNET_PRIVATE_KEY: Your deployment wallet private key
-# - ETHERSCAN_API_KEY: Get from https://etherscan.io/myapikey
+1. Cấu hình file .env:
+
+```
+TESTNET_PRIVATE_KEY=<private_key>
+ETHERSCAN_API_KEY=<api_key>
 ```
 
-2. **Deploy Contracts**
+2. Deploy:
+
 ```bash
 npx hardhat deploy --network sepolia
 ```
 
-3. **Verify on Etherscan**
+3. Verify contracts:
+
 ```bash
-# Verify MockUSDC (example with constructor args)
-npx hardhat verify --network sepolia <MOCK_USDC_ADDRESS>
-
-# Verify DepositCertificate
-npx hardhat verify --network sepolia <CERTIFICATE_ADDRESS> "SavingBank Deposit Certificate" "SBDC"
-
-# Verify Vault
-npx hardhat verify --network sepolia <VAULT_ADDRESS> <MOCK_USDC_ADDRESS>
-
-# Verify SavingBank
-npx hardhat verify --network sepolia <SAVINGBANK_ADDRESS> <MOCK_USDC_ADDRESS> <CERTIFICATE_ADDRESS> <VAULT_ADDRESS>
+npx hardhat verify --network sepolia <ADDRESS> [constructor_args]
 ```
 
-4. **Post-Deployment Setup**
-```bash
-# Grant roles (via Hardhat console or script)
-# - Grant LIQUIDITY_MANAGER_ROLE to SavingBank on Vault
-# - Grant WITHDRAW_ROLE to SavingBank on Vault
-# - Grant MINTER_ROLE to SavingBank on DepositCertificate
-```
+---
 
-## 💡 Key Features
+## Tài liệu
 
-### Business Logic
-- **Saving Plans**: Configurable interest rates, terms, and penalties
-- **Deposits**: ERC721 certificates with compound interest capability
-- **Withdrawals**: Normal maturity + early withdrawal with penalties
-- **Renewals**: Automatic rollover with compounding interest
+| File                                       | Nội dung           |
+| ------------------------------------------ | ------------------ |
+| [QUEST.md](documents/QUEST.md)             | Yêu cầu sản phẩm   |
+| [REQUIREMENT.md](documents/REQUIREMENT.md) | Kiến trúc hệ thống |
+| [PLAN.md](documents/PLAN.md)               | Kế hoạch thực thi  |
+| [TEST.md](documents/TEST.md)               | Checklist kiểm thử |
 
-### Architecture
-- **Vault Separation**: Clean separation of business logic and liquidity management
-- **Role-Based Security**: Granular permissions with OpenZeppelin AccessControl
-- **Clean Code**: SOLID principles, comprehensive testing
+---
 
-## 📚 Documentation
+## License
 
-- **[NEXT_PHASE_PLAN.md](documents/NEXT_PHASE_PLAN.md)**: Production deployment roadmap
-- **[QUEST.md](documents/QUEST.md)**: Business requirements
-- **[REQUIREMENT.md](documents/REQUIREMENT.md)**: Technical standards
-- **[SPEC.md](documents/SPEC.md)**: Technical specification
-
-## 📄 License
-
-MIT License
+MIT

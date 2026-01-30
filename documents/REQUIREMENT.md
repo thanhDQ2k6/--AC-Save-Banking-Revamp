@@ -1,149 +1,134 @@
-# 🛠️ Saving Banking Revamp — Tài Liệu Yêu Cầu Kỹ Thuật
+# Saving Banking - Kiến Trúc Hệ Thống
 
-Tài liệu này chi tiết hóa các nguyên tắc thiết kế, cấu trúc hệ thống và các tiêu chuẩn kỹ thuật áp dụng cho dự án Saving Banking.
+Tài liệu mô tả cấu trúc kỹ thuật của hệ thống, bao gồm các thành phần, quan hệ giữa chúng, và cấu trúc dữ liệu.
 
 ---
 
-## 1. NGUYÊN TẮC CLEAN CODE (BẮT BUỘC)
+## 1. Tổng quan
 
-### 1.1 Áp Dụng SOLID Principles
+Hệ thống gồm 4 thành phần chính:
 
-| Nguyên tắc | Mô tả ứng dụng cụ thể |
-| :--- | :--- |
-| **S**ingle Responsibility | Mỗi Contract đảm nhận một vai trò duy nhất: `SavingBank` (Logic nghiệp vụ), `DepositCertificate` (Quản lý NFT), `InterestCalculator` (Tính toán toán học). |
-| **O**pen/Closed | Sử dụng Interface `ISavingBank` để cho phép mở rộng tính năng mà không cần sửa đổi mã nguồn cốt lõi. |
-| **L**iskov Substitution | Đảm bảo các Contract kế thừa từ OpenZeppelin tuân thủ nghiêm ngặt Interface chuẩn. |
-| **I**nterface Segregation | Chia nhỏ Interface: `ISavingBankAdmin`, `ISavingBankUser`, `ISavingBankView` để giảm thiểu sự phụ thuộc không cần thiết. |
-| **D**ependency Inversion | Các Module cấp cao không phụ thuộc vào Module cấp thấp, cả hai đều phụ thuộc vào Abstraction (Interface). |
+| Thành phần         | Vai trò                                                    |
+| ------------------ | ---------------------------------------------------------- |
+| SavingBank         | Điều phối nghiệp vụ chính (gói tiết kiệm, gửi/rút/gia hạn) |
+| Vault              | Quản lý quỹ thanh khoản để trả lãi                         |
+| DepositCertificate | NFT đại diện quyền sở hữu sổ tiết kiệm                     |
+| InterestCalculator | Thư viện tính toán lãi suất                                |
 
-### 1.2 Quy Tắc Đặt Tên (Naming Conventions)
+Tách riêng từng thành phần để:
 
-*Tuyệt đối không sử dụng từ viết tắt gây khó hiểu.*
+- Vault bị tấn công không ảnh hưởng logic SavingBank
+- NFT có thể nâng cấp độc lập
+- Thư viện tính toán dễ kiểm tra và tái sử dụng
 
-| Đối tượng | Quy tắc | Ví dụ chuẩn |
-| :--- | :--- | :--- |
-| **Contract** | PascalCase, Danh từ đầy đủ | `SavingBank`, `DepositCertificate` |
-| **Function** | camelCase, Động từ + Danh từ | `createSavingPlan`, `calculateInterest` |
-| **Variable** | camelCase, Danh từ mô tả | `depositAmount`, `maturityTimestamp` |
-| **Constant** | SCREAMING_SNAKE_CASE | `BASIS_POINTS`, `SECONDS_PER_YEAR` |
-| **Event** | PascalCase, Quá khứ phân từ | `DepositOpened`, `PlanCreated` |
-| **Error** | PascalCase, Mô tả trạng thái lỗi | `PlanNotEnabled`, `InsufficientBalance` |
-| **Mapping** | Prefix mô tả Key-to-Value | `depositIdToRecord`, `planIdToDetails` |
+---
 
-### 1.3 Cấu Trúc Mã Nguồn (Flat Logic)
+## 2. Quan hệ giữa các thành phần
 
-Yêu cầu sử dụng **Guard Clauses** thay vì lồng ghép `if` quá sâu (Nested Logic).
+```
+User
+  │
+  ▼
+SavingBank ──uses──► InterestCalculator (library)
+  │
+  ├──calls──► Vault (chuyển tiền gốc vào, rút tiền + lãi ra)
+  │
+  └──calls──► DepositCertificate (mint NFT khi mở sổ, burn khi tất toán)
+```
 
-```solidity
-// ✅ PHƯƠNG PHÁP ĐÚNG - Guard clauses & Helper functions
-function withdraw(uint256 depositId) external {
-    _validateDepositOwnership(depositId, msg.sender);
-    _validateDepositNotClosed(depositId);
-    
-    if (_isDepositMature(depositId)) {
-        _processMaturityWithdrawal(depositId);
-    } else {
-        _processEarlyWithdrawal(depositId);
-    }
-}
+Luồng hoạt động:
+
+1. User gọi SavingBank để mở sổ tiết kiệm
+2. SavingBank nhận tiền từ User, chuyển vào Vault
+3. SavingBank gọi DepositCertificate mint NFT cho User
+4. Khi rút tiền, SavingBank tính lãi bằng InterestCalculator
+5. SavingBank gọi Vault rút tiền gốc + lãi trả User
+6. SavingBank burn NFT
+
+---
+
+## 3. Cấu trúc dữ liệu
+
+### 3.1 Gói tiết kiệm (SavingPlan)
+
+Định nghĩa các thông số cho một loại sản phẩm tiết kiệm.
+
+| Field                     | Type    | Ý nghĩa                                      |
+| ------------------------- | ------- | -------------------------------------------- |
+| name                      | string  | Tên gói (hiển thị)                           |
+| interestRateBps           | uint256 | Lãi suất năm, đơn vị basis points (100 = 1%) |
+| minTermInDays             | uint256 | Kỳ hạn tối thiểu (ngày)                      |
+| maxTermInDays             | uint256 | Kỳ hạn tối đa (ngày)                         |
+| minDepositAmount          | uint256 | Số tiền gửi tối thiểu                        |
+| maxDepositAmount          | uint256 | Số tiền gửi tối đa                           |
+| earlyWithdrawalPenaltyBps | uint256 | Phí phạt rút sớm (basis points)              |
+| isActive                  | bool    | Gói còn hoạt động không                      |
+
+### 3.2 Sổ tiết kiệm (Deposit)
+
+Thông tin một khoản gửi cụ thể của người dùng.
+
+| Field            | Type          | Ý nghĩa                                  |
+| ---------------- | ------------- | ---------------------------------------- |
+| planId           | uint256       | ID gói tiết kiệm đã chọn                 |
+| principal        | uint256       | Số tiền gốc                              |
+| startTime        | uint256       | Thời điểm bắt đầu (timestamp)            |
+| maturityTime     | uint256       | Thời điểm đáo hạn (timestamp)            |
+| interestRateBps  | uint256       | Lãi suất tại thời điểm mở (snapshot)     |
+| expectedInterest | uint256       | Lãi dự kiến khi đáo hạn                  |
+| status           | DepositStatus | Trạng thái: Active / Withdrawn / Renewed |
+
+### 3.3 Trạng thái sổ tiết kiệm (DepositStatus)
+
+```
+Active    - Đang hoạt động, chưa tất toán
+Withdrawn - Đã rút tiền (đúng hạn hoặc sớm)
+Renewed   - Đã gia hạn sang sổ mới
 ```
 
 ---
 
-## 2. KIẾN TRÚC HỆ THỐNG
+## 4. Phân quyền
 
-### 2.1 Sơ Đồ Logic Contract
+Hệ thống sử dụng Role-Based Access Control với các vai trò:
 
-Hệ thống được thiết kế theo mô hình Modular để tách biệt hoàn toàn các trách nhiệm.
+| Role              | Quyền hạn                                             |
+| ----------------- | ----------------------------------------------------- |
+| DEFAULT_ADMIN     | Cấp/thu hồi các role khác                             |
+| ADMIN             | Tạo/cập nhật gói tiết kiệm, cấu hình penalty receiver |
+| PAUSER            | Tạm dừng/mở lại hệ thống                              |
+| LIQUIDITY_MANAGER | Nạp/rút vốn từ Vault                                  |
+| MINTER            | Mint NFT (chỉ SavingBank có quyền này)                |
+| WITHDRAW          | Rút tiền từ Vault (chỉ SavingBank có quyền này)       |
 
-```mermaid
-graph TD
-    A[Interfaces: ISavingBank, IDepositCertificate] --> B[Library: InterestCalculator]
-    B --> C[Core: SavingBank]
-    C --> D[NFT: DepositCertificate]
-    C --> E[Token: MockUSDC]
-```
-
-### 2.2 Tách Biệt Vai Trò Token và NFT
-
-| Đặc tính | ERC20 (MockUSDC) | ERC721 (DepositCertificate) |
-| :--- | :--- | :--- |
-| **Mục đích** | Tài sản gửi và trả lãi (Stablecoin). | Chứng chỉ sở hữu khoản tiết kiệm. |
-| **Tương tác** | User nạp/rút thông qua SavingBank. | Chỉ SavingBank có quyền Mint/Burn. |
-| **Khả năng chuyển nhượng** | Tự do theo chuẩn ERC20. | Có thể chuyển nhượng (Transferable). |
-| **Đơn vị** | 6 Decimals (chuẩn USDC). | Unique Token ID (DepositId). |
+Nguyên tắc: Mỗi role chỉ có quyền tối thiểu cần thiết. SavingBank được cấp MINTER và WITHDRAW để thực hiện nghiệp vụ, Admin không có quyền rút tiền trực tiếp từ Vault.
 
 ---
 
-## 3. CẤU TRÚC DỮ LIỆU (DATA STRUCTURES)
+## 5. Bảo mật
 
-### 3.1 SavingPlan (Gói Tiết Kiệm)
-Mô tả cấu hình nghiệp vụ của một sản phẩm tiết kiệm.
+Các cơ chế bảo vệ:
 
-```solidity
-struct SavingPlan {
-    uint256 planId;
-    uint64 tenorSeconds;              // Thời gian đáo hạn (giây)
-    uint32 annualInterestRateBps;     // Lãi suất năm (1% = 100 bps)
-    uint256 minimumDeposit;           // Mức gửi tối thiểu
-    uint256 maximumDeposit;           // Mức gửi tối đa (0 = không giới hạn)
-    uint32 earlyWithdrawalPenaltyBps; // Tỷ lệ phạt rút trước hạn
-    address penaltyReceiver;          // Địa chỉ nhận tiền phạt
-    bool isEnabled;                   // Trạng thái hoạt động
-}
-```
-
-### 3.2 DepositRecord (Hồ Sơ Tiết Kiệm)
-Lưu trữ thông tin chi tiết của mỗi khoản gửi.
-
-```solidity
-struct DepositRecord {
-    uint256 depositId;
-    address depositor;        // Người gửi ban đầu
-    uint256 planId;
-    uint256 principalAmount;  // Số tiền gốc gửi vào
-    uint64 depositTimestamp;  // Thời điểm thực hiện gửi
-    uint64 maturityTimestamp; // Thời điểm đáo hạn dự kiến
-    bool isClosed;            // Trạng thái sổ (đã đóng/chưa đóng)
-}
-```
+| Cơ chế          | Mục đích                                           |
+| --------------- | -------------------------------------------------- |
+| ReentrancyGuard | Chống tấn công reentrancy trên các hàm chuyển tiền |
+| Pausable        | Dừng khẩn cấp khi phát hiện vấn đề                 |
+| SafeERC20       | Xử lý an toàn các token ERC20 không chuẩn          |
+| Access Control  | Phân quyền chặt chẽ từng chức năng                 |
+| Ownership check | Kiểm tra quyền sở hữu NFT trước khi rút/gia hạn    |
 
 ---
 
-## 4. QUY TRÌNH & CÔNG THỨC NGHIỆP VỤ
+## 6. Nguyên tắc thiết kế
 
-### 4.1 Tính Lãi (Simple Interest)
-Phép tính luôn được **Làm tròn xuống (Floor)** để đảm bảo an toàn cho quỹ hệ thống.
+Hệ thống tuân theo các nguyên tắc:
 
-$$Interest = \lfloor\frac{Principal \times APR_{Bps} \times Tenor_{Seconds}}{SECONDS\_PER\_YEAR \times BASIS\_POINTS}\rfloor$$
+1. **Single Responsibility**: Mỗi contract làm một việc (SavingBank = logic, Vault = giữ tiền, Certificate = ownership)
 
-### 4.2 Xử Lý Rút Tiền
+2. **Dependency Injection**: SavingBank nhận địa chỉ Vault và Certificate qua constructor, dễ thay thế khi test
 
-*   **Đúng hạn (At Maturity):** `Payout = Principal + Interest`. Lãi suất rút từ Vault thanh khoản.
-*   **Trước hạn (Early):** `Payout = Principal - Penalty`. `Penalty = \lfloor\frac{Principal \times Penalty_{Bps}}{BASIS\_POINTS}\rfloor`.
+3. **Interface Segregation**: Tách interface theo chức năng (Admin, User, View) để client chỉ phụ thuộc những gì cần
 
----
+4. **Guard Clauses**: Kiểm tra điều kiện và return/revert sớm, tránh nested if-else sâu
 
-## 5. QUẢN TRỊ VÀ BẢO MẬT (SECURITY & ACCESS CONTROL)
-
-### 5.1 Phân Quyền Roles
-
-| Vai trò | Chức năng |
-| :--- | :--- |
-| **DEFAULT_ADMIN_ROLE** | Quản trị toàn quyền, gán roles khác. |
-| **ADMIN_ROLE** | Quản lý Saving Plans, nạp/rút Liquidity Vault. |
-| **PAUSER_ROLE** | Kích hoạt trạng thái khẩn cấp (Emergency Pause). |
-
-### 5.2 Yêu Cầu Bảo Mật Tối Thiểu
-1.  **Reentrancy Protection:** Sử dụng `nonReentrant` trên tất cả các hàm có tương tác với ngoại vi (Token transfer).
-2.  **Emergency Stop:** Cơ chế `Pausable` để chặn các hành vi nạp tiền/gia hạn khi có biến cố.
-3.  **Validation:** Checklist nghiêm ngặt cho mỗi giao dịch (Plan status, Balance, Ownership).
-
----
-
-## 6. TIẾU CHUẨN KIỂM THỬ (TESTING STANDARDS)
-
-*   **Unit Tests:** Bao phủ 100% các hàm toán học và logic rẽ nhánh.
-*   **Integration Tests:** Mô phỏng luồng nghiệp vụ hoàn chỉnh (Open -> Wait -> Withdraw/Renew).
-*   **Edge Cases:** Kiểm tra các giá trị biên (0, max uint256), tình huống Vault cạn kiệt thanh khoản.
-*   **Gas Analytics:** Đánh giá chi phí gas cho mỗi hành động chính của người dùng.
+5. **Custom Errors**: Dùng error thay vì require string để tiết kiệm gas và rõ ràng hơn
