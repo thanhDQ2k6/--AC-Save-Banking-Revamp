@@ -120,10 +120,10 @@ npx hardhat run scripts/manual-tests/run-all.ts --network localhost
 └────────┬────────┘
          │
          ▼
-┌─────────────────┐      ┌───────────────────┐
-│   SavingBank    │◄────►│ DepositCertificate│
-│  (Main Logic)   │      │    (NFT ERC721)   │
-└────────┬────────┘      └───────────────────┘
+┌─────────────────┐      ┌────────────────────┐
+│   SavingBank    │◄────►│ DepositCertificate │
+│  (Main Logic)   │      │    (NFT ERC721)    │
+└────────┬────────┘      └────────────────────┘
          │
          ▼
 ┌─────────────────┐      ┌─────────────────┐
