@@ -6,10 +6,13 @@ const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
   const { deploy } = deployments;
   const { deployer } = await getNamedAccounts();
 
-  console.log("2️⃣ Deploying DepositCertificate contract...");
-  console.log("📋 Using deployer:", deployer);
+  console.log("");
+  console.log("=".repeat(60));
+  console.log("[2/4] DepositCertificate");
+  console.log("=".repeat(60));
+  console.log("Deployer:", deployer);
 
-  const depositCertificateDeployment = await deploy("DepositCertificate", {
+  const deployment = await deploy("DepositCertificate", {
     contract: "DepositCertificate",
     args: ["SavingBank Deposit Certificate", "SBDC"],
     from: deployer,
@@ -18,10 +21,11 @@ const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
     waitConfirmations: 1,
   });
 
-  console.log("📜 DepositCertificate deployed at:", depositCertificateDeployment.address);
-  console.log(`🎫 NFT Name: SavingBank Deposit Certificate`);
-  console.log(`🏷️ NFT Symbol: SBDC`);
-  console.log(`👤 Deployer: ${deployer}`);
+  console.log("");
+  console.log("DepositCertificate deployed:", deployment.address);
+  console.log("  Name:   SavingBank Deposit Certificate");
+  console.log("  Symbol: SBDC");
+  console.log("");
 };
 
 func.tags = ["DepositCertificate", "nft"];

@@ -3,66 +3,72 @@ import { DeployFunction } from "hardhat-deploy/types";
 import { ethers } from "hardhat";
 
 const func: DeployFunction = async function (hre: HardhatRuntimeEnvironment) {
-    const { deployments, getNamedAccounts } = hre;
-    const { deploy, get } = deployments;
+  const { deployments, getNamedAccounts } = hre;
+  const { deploy, get } = deployments;
+  const { deployer } = await getNamedAccounts();
 
-    const { deployer } = await getNamedAccounts();
+  console.log("");
+  console.log("=".repeat(60));
+  console.log("[4/4] SavingBank");
+  console.log("=".repeat(60));
+  console.log("Deployer:", deployer);
 
-    console.log("4️⃣ Deploying SavingBank contract...");
-    console.log("📋 Using deployer:", deployer);
+  const mockUSDC = await get("MockUSDC");
+  const depositCertificate = await get("DepositCertificate");
+  const vault = await get("Vault");
 
-    // Get previously deployed contracts
-    const mockUSDC = await get("MockUSDC");
-    const depositCertificate = await get("DepositCertificate");
-    const vault = await get("Vault");
+  console.log("Dependencies:");
+  console.log("  Token:       ", mockUSDC.address);
+  console.log("  Certificate: ", depositCertificate.address);
+  console.log("  Vault:       ", vault.address);
 
-    console.log("🪙 Using MockUSDC at:", mockUSDC.address);
-    console.log("📜 Using DepositCertificate at:", depositCertificate.address);
-    console.log("🏛️ Using Vault at:", vault.address);
+  const deployment = await deploy("SavingBank", {
+    from: deployer,
+    args: [mockUSDC.address, depositCertificate.address, vault.address],
+    log: true,
+    waitConfirmations: 1,
+  });
 
-    // Deploy SavingBank
-    const savingBankDeployment = await deploy("SavingBank", {
-        from: deployer,
-        args: [mockUSDC.address, depositCertificate.address, vault.address],
-        log: true,
-        waitConfirmations: 1,
-    });
+  console.log("");
+  console.log("SavingBank deployed:", deployment.address);
 
-    console.log("🏦 SavingBank deployed at:", savingBankDeployment.address);
+  // Setup role permissions
+  console.log("");
+  console.log("Setting up roles...");
 
-    // Setup role permissions
-    const savingBank = await ethers.getContractAt("SavingBank", savingBankDeployment.address);
-    const vaultContract = await ethers.getContractAt("Vault", vault.address);
-    
-    console.log("🔑 Setting up role permissions...");
-    
-    // Grant SavingBank the LIQUIDITY_MANAGER_ROLE on Vault
-    const LIQUIDITY_MANAGER_ROLE = await vaultContract.LIQUIDITY_MANAGER_ROLE();
-    console.log("🔐 Granting LIQUIDITY_MANAGER_ROLE to SavingBank...");
-    let tx = await vaultContract.grantRole(LIQUIDITY_MANAGER_ROLE, savingBankDeployment.address);
-    await tx.wait();
+  const vaultContract = await ethers.getContractAt("Vault", vault.address);
+  const depositCert = await ethers.getContractAt("DepositCertificate", depositCertificate.address);
 
-    // Grant SavingBank the WITHDRAW_ROLE on Vault  
-    const WITHDRAW_ROLE = await vaultContract.WITHDRAW_ROLE();
-    console.log("💰 Granting WITHDRAW_ROLE to SavingBank...");
-    tx = await vaultContract.grantRole(WITHDRAW_ROLE, savingBankDeployment.address);
-    await tx.wait();
+  // Vault roles
+  const LIQUIDITY_MANAGER_ROLE = await vaultContract.LIQUIDITY_MANAGER_ROLE();
+  let tx = await vaultContract.grantRole(LIQUIDITY_MANAGER_ROLE, deployment.address);
+  await tx.wait();
+  console.log("  Vault: LIQUIDITY_MANAGER_ROLE -> SavingBank");
 
-    // Setup DepositCertificate minter role
-    const depositCert = await ethers.getContractAt("DepositCertificate", depositCertificate.address);
-    const MINTER_ROLE = await depositCert.MINTER_ROLE();
-    console.log("🎫 Granting MINTER_ROLE to SavingBank...");
-    tx = await depositCert.grantRole(MINTER_ROLE, savingBankDeployment.address);
-    await tx.wait();
+  const WITHDRAW_ROLE = await vaultContract.WITHDRAW_ROLE();
+  tx = await vaultContract.grantRole(WITHDRAW_ROLE, deployment.address);
+  await tx.wait();
+  console.log("  Vault: WITHDRAW_ROLE -> SavingBank");
 
-    console.log("✅ SavingBank deployment completed!");
-    console.log(`🏦 SavingBank Address: ${savingBankDeployment.address}`);
-    console.log(`🏛️ Vault Address: ${vault.address}`);
-    console.log(`📜 Certificate Address: ${depositCertificate.address}`);
-    console.log(`🪙 Token Address: ${mockUSDC.address}`);
-    console.log(`👤 Deployer: ${deployer}`);
-    
-    return true;
+  // Certificate roles
+  const MINTER_ROLE = await depositCert.MINTER_ROLE();
+  tx = await depositCert.grantRole(MINTER_ROLE, deployment.address);
+  await tx.wait();
+  console.log("  Certificate: MINTER_ROLE -> SavingBank");
+
+  // Summary
+  console.log("");
+  console.log("=".repeat(60));
+  console.log("DEPLOYMENT COMPLETE");
+  console.log("=".repeat(60));
+  console.log("MockUSDC:          ", mockUSDC.address);
+  console.log("DepositCertificate:", depositCertificate.address);
+  console.log("Vault:             ", vault.address);
+  console.log("SavingBank:        ", deployment.address);
+  console.log("=".repeat(60));
+  console.log("");
+
+  return true;
 };
 
 export default func;
